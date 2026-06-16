@@ -141,6 +141,13 @@ body {
     color: var(--color-text);
 }
 
+.stat-value-small {
+    font-size: 9px;
+    line-height: 1.2;
+    text-align: right;
+    max-width: 200px;
+}
+
 .text-accent {
     color: var(--color-accent) !important;
 }
@@ -157,6 +164,7 @@ body {
 
 .btn-row {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-sm);
 }
 
@@ -206,6 +214,37 @@ body {
 .btn-patch:active:not(:disabled) {
     transform: translate(3px, 3px);
     box-shadow: 1px 1px 0px #000000;
+}
+
+.btn-tiktok {
+    display: block;
+    width: 100%;
+    padding: var(--space-sm) var(--space-lg);
+    border: var(--border-thick);
+    border-radius: 4px;
+    background: #010101;
+    color: #ffffff;
+    font-family: inherit;
+    font-weight: 800;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-align: center;
+    text-decoration: none;
+    box-shadow: 4px 4px 0px #fe2c55;
+    transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+        box-shadow 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    box-sizing: border-box;
+}
+
+.btn-tiktok:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0px #fe2c55;
+}
+
+.btn-tiktok:active {
+    transform: translate(2px, 2px);
+    box-shadow: 2px 2px 0px #fe2c55;
 }
 
 .btn:disabled {
@@ -802,6 +841,34 @@ body {
     font-weight: 600;
 }
 
+.upload-note {
+    display: flex;
+    gap: var(--space-sm);
+    align-items: flex-start;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-inner);
+    border: var(--border-thick);
+    border-radius: 4px;
+    border-color: #fe2c5540;
+}
+
+.upload-note svg {
+    width: 14px;
+    height: 14px;
+    stroke: #fe2c55;
+    stroke-width: 2.2;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+.upload-note span {
+    font-size: 10px;
+    line-height: 1.4;
+    color: #bbbbbb;
+    font-weight: 600;
+    font-family: "JetBrains Mono", monospace;
+}
+
 .history-list {
     display: flex;
     flex-direction: column;
@@ -1230,6 +1297,7 @@ body {
 
 .modal-btn {
     flex: 1;
+    min-width: min-content;
     padding: var(--space-sm);
     font-family: "JetBrains Mono", monospace;
     font-size: 11px;
@@ -1257,6 +1325,30 @@ body {
 .modal-btn-confirm {
     background: var(--color-primary);
     color: #000000;
+}
+
+@media (max-width: 1100px) and (min-width: 901px) {
+    .container {
+        grid-template-columns: 1fr 1fr 1fr;
+    }
+
+    .panel-left,
+    .panel-right {
+        max-width: 100%;
+    }
+
+    .stat-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-xs);
+        width: 100%;
+    }
+
+    .stat-value-small {
+        text-align: left;
+        max-width: 100%;
+        word-break: break-word;
+    }
 }
 
 @media (max-width: 900px) {
@@ -1340,5 +1432,12 @@ body {
         align-items: flex-start;
         gap: var(--space-xs);
         width: 100%;
+    }
+
+    .stat-value-small {
+        text-align: left;
+        max-width: 100%;
+        font-size: 9px;
+        word-break: break-word;
     }
 }

@@ -21,6 +21,26 @@ import {
     pruneOldRecords,
     saveRecord,
 } from "./db.js";
+import { parseBoxes, getBoxHeaderSize, updateBoxSize, updateChunkOffsets } from "./src/mp4-boxes.mjs";
+import { buildEdtsAtom, rebuildWithElstBypass, patchMvhdMatrix } from "./src/mp4-patches.mjs";
+import { stripUdtaAtom, injectCommentUdta, stripTkhdMatrix } from "./src/mp4-strip.mjs";
+import { inflateSampleTableVideo } from "./src/mp4-inflate.mjs";
+
+const FRAME_CAPTURE_TIMEOUT_MS = 5000;
+const METADATA_TIMEOUT_MS = 10000;
+const MAX_STORAGE_BYTES = 209715200;
+const HISTORY_EXPIRY_MS = 43200000;
+const MAX_THUMBNAIL_DIMENSION = 120;
+const MOBILE_BREAKPOINT = 900;
+const DOWNLOAD_REVOKE_DELAY_MS = 1000;
+const PROGRESS_HIDE_DELAY_MS = 800;
+const PROGRESS_FADE_DURATION_MS = 400;
+const DOWNLOAD_INTERVAL_MS = 300;
+const PATCH_INTERVAL_MS = 600;
+const MOBILE_SCROLL_DELAY_MS = 150;
+const MAX_VIDEO_DURATION_SECONDS = 30;
+const DOWNLOAD_ANCHOR_CLEANUP_MS = 100;
+const SAFE_THUMBNAIL_PREFIX = "data:image/jpeg;base64,";
 
 const ALL_ICONS = {
     Upload,
@@ -61,6 +81,7 @@ const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 let selectedFiles = [];
 let currentFlowState = "idle";
 let isCancelled = false;
+let processingFiles = false;
 
 let lastWidth = null;
 function adjustMobileLayout() {
@@ -68,29 +89,33 @@ function adjustMobileLayout() {
     if (lastWidth !== null && currentWidth === lastWidth) return;
     lastWidth = currentWidth;
 
-    const isMobile = currentWidth <= 900;
+    const isMobile = currentWidth <= MOBILE_BREAKPOINT;
     const header = document.querySelector(".header");
     const panelLeft = document.querySelector(".panel-left");
     const panelRight = document.querySelector(".panel-right");
-    const dropZone = document.getElementById("dropZone");
+    const dropZoneEl = document.getElementById("dropZone");
     if (isMobile) {
-        if (dropZone && header && dropZone.parentNode !== panelLeft) {
-            header.after(dropZone);
+        if (dropZoneEl && header && dropZoneEl.parentNode !== panelLeft) {
+            header.after(dropZoneEl);
         }
     } else {
-        if (dropZone && panelRight && dropZone.parentNode !== panelRight) {
-            panelRight.insertBefore(dropZone, panelRight.firstChild);
+        if (dropZoneEl && panelRight && dropZoneEl.parentNode !== panelRight) {
+            panelRight.insertBefore(dropZoneEl, panelRight.firstChild);
         }
     }
 }
 
-function initializeApp() {
+function refreshIcons() {
     createIcons({
         icons: ALL_ICONS,
     });
+}
+
+function initializeApp() {
+    refreshIcons();
     pruneOldRecords()
         .then(() => renderHistoryList())
-        .catch(() => {});
+        .catch(err => logMessage(`History pruning failed: ${err.message}`, "warning"));
     adjustMobileLayout();
     window.addEventListener("resize", adjustMobileLayout);
 }
@@ -122,8 +147,8 @@ function hideProgress() {
         setTimeout(() => {
             setProgress(0);
             progressTrack.classList.remove("active");
-        }, 400);
-    }, 800);
+        }, PROGRESS_FADE_DURATION_MS);
+    }, PROGRESS_HIDE_DELAY_MS);
 }
 
 function isSupportedFile(file) {
@@ -142,9 +167,11 @@ function getMimeType(file) {
 }
 
 function getOutputFilename(file) {
-    const match = file.name.match(/^(.+)(\.[^.]+)$/);
-    if (!match) return file.name + outputSuffix;
-    return match[1] + outputSuffix + match[2];
+    const lastDotIndex = file.name.lastIndexOf('.');
+    if (lastDotIndex <= 0) return file.name + outputSuffix;
+    const name = file.name.substring(0, lastDotIndex);
+    const ext = file.name.substring(lastDotIndex);
+    return name + outputSuffix + ext;
 }
 
 export function captureVideoFrame(file) {
@@ -153,26 +180,41 @@ export function captureVideoFrame(file) {
         video.preload = "auto";
         video.muted = true;
         video.playsInline = true;
+        let settled = false;
+        let objectUrl = null;
 
-        const objectUrl = URL.createObjectURL(file);
-        const timeoutId = setTimeout(() => {
+        function cleanup(result) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            video.onloadeddata = null;
+            video.onseeked = null;
+            video.onerror = null;
             video.src = "";
             video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(null);
-        }, 5000);
+            if (objectUrl) {
+                URL.revokeObjectURL(objectUrl);
+            }
+            resolve(result);
+        }
+
+        objectUrl = URL.createObjectURL(file);
+        const timeoutId = setTimeout(() => {
+            cleanup(null);
+        }, FRAME_CAPTURE_TIMEOUT_MS);
 
         video.src = objectUrl;
 
         video.onloadeddata = () => {
+            if (settled) return;
             video.currentTime = 0.1;
         };
 
         video.onseeked = () => {
-            clearTimeout(timeoutId);
+            if (settled) return;
             const canvas = document.createElement("canvas");
             const ctx = canvas.getContext("2d");
-            const maxDimension = 120;
+            const maxDimension = MAX_THUMBNAIL_DIMENSION;
             let width = video.videoWidth;
             let height = video.videoHeight;
 
@@ -193,24 +235,11 @@ export function captureVideoFrame(file) {
             ctx.drawImage(video, 0, 0, width, height);
 
             const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
-            video.onloadeddata = null;
-            video.onseeked = null;
-            video.onerror = null;
-            video.src = "";
-            video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(dataUrl);
+            cleanup(dataUrl);
         };
 
         video.onerror = () => {
-            clearTimeout(timeoutId);
-            video.onloadeddata = null;
-            video.onseeked = null;
-            video.onerror = null;
-            video.src = "";
-            video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(null);
+            cleanup(null);
         };
     });
 }
@@ -221,283 +250,6 @@ function formatFileSize(bytes) {
     return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-export function parseBoxes(bytes, view, startOffset, endOffset) {
-    const boxes = [];
-    let offset = startOffset;
-    while (offset + 8 <= endOffset) {
-        const rawSize = view.getUint32(offset, false);
-        let size;
-        let is64Bit = false;
-
-        if (rawSize === 0) {
-            size = endOffset - offset;
-        } else if (rawSize === 1) {
-            is64Bit = true;
-            if (offset + 16 > endOffset) break;
-            const hi = view.getUint32(offset + 8, false);
-            const lo = view.getUint32(offset + 12, false);
-            const sizeBig = (BigInt(hi) << 32n) + BigInt(lo);
-            size = Number(sizeBig);
-        } else {
-            size = rawSize;
-        }
-
-        if (size < 8 || offset + size > endOffset) break;
-
-        const type = String.fromCharCode(
-            bytes[offset + 4],
-            bytes[offset + 5],
-            bytes[offset + 6],
-            bytes[offset + 7],
-        );
-        boxes.push({ offset, size, type, end: offset + size, is64Bit });
-        offset += size;
-    }
-    return boxes;
-}
-
-function getTkhdDuration(bytes, view, tkhdOffset) {
-    const version = bytes[tkhdOffset + 8];
-    if (version === 1) {
-        return Number(view.getBigUint64(tkhdOffset + 36, false));
-    }
-    return view.getUint32(tkhdOffset + 28, false);
-}
-
-export function buildEdtsAtom(duration) {
-    const useVersion1 = duration > 0xffffffff;
-    const elstSize = useVersion1 ? 36 : 28;
-    const edtsSize = 8 + elstSize;
-    const buffer = new ArrayBuffer(edtsSize);
-    const b = new Uint8Array(buffer);
-    const v = new DataView(buffer);
-
-    v.setUint32(0, edtsSize, false);
-    b[4] = 0x65;
-    b[5] = 0x64;
-    b[6] = 0x74;
-    b[7] = 0x73;
-
-    v.setUint32(8, elstSize, false);
-    b[12] = 0x65;
-    b[13] = 0x6c;
-    b[14] = 0x73;
-    b[15] = 0x74;
-
-    if (useVersion1) {
-        v.setUint32(16, 0x01000000, false);
-        v.setUint32(20, 1, false);
-        v.setBigUint64(24, BigInt(duration), false);
-        v.setBigInt64(32, 0n, false);
-        v.setUint32(40, 0x00010000, false);
-    } else {
-        v.setUint32(16, 0, false);
-        v.setUint32(20, 1, false);
-        v.setUint32(24, duration, false);
-        v.setInt32(28, 0, false);
-        v.setUint32(32, 0x00010000, false);
-    }
-
-    return b;
-}
-
-function getBoxHeaderSize(box) {
-    return box.is64Bit ? 16 : 8;
-}
-
-function updateBoxSize(view, offset, box, addedBytes) {
-    if (box.is64Bit) {
-        view.setBigUint64(offset + 8, BigInt(box.size + addedBytes), false);
-    } else {
-        view.setUint32(offset, box.size + addedBytes, false);
-    }
-}
-
-function updateChunkOffsets(newBytes, newView, boxStart, boxEnd, delta) {
-    const containerTypes = new Set(["moov", "trak", "mdia", "minf", "stbl"]);
-    for (const box of parseBoxes(newBytes, newView, boxStart, boxEnd)) {
-        if (box.type === "stco") {
-            const headerSize = getBoxHeaderSize(box);
-            const count = newView.getUint32(box.offset + headerSize + 4, false);
-            for (let i = 0; i < count; i++) {
-                const pos = box.offset + headerSize + 8 + i * 4;
-                newView.setUint32(
-                    pos,
-                    newView.getUint32(pos, false) + delta,
-                    false,
-                );
-            }
-        } else if (box.type === "co64") {
-            const headerSize = getBoxHeaderSize(box);
-            const count = newView.getUint32(box.offset + headerSize + 4, false);
-            for (let i = 0; i < count; i++) {
-                const pos = box.offset + headerSize + 8 + i * 8;
-                const currentOffset = newView.getBigUint64(pos, false);
-                newView.setBigUint64(pos, currentOffset + BigInt(delta), false);
-            }
-        } else if (containerTypes.has(box.type)) {
-            updateChunkOffsets(
-                newBytes,
-                newView,
-                box.offset + getBoxHeaderSize(box),
-                box.end,
-                delta,
-            );
-        }
-    }
-}
-
-export function rebuildWithElstBypass(inputBytes, inputView) {
-    const fileSize = inputBytes.length;
-    const topBoxes = parseBoxes(inputBytes, inputView, 0, fileSize);
-    const moovBox = topBoxes.find((b) => b.type === "moov");
-    if (!moovBox) return null;
-
-    const mdatBox = topBoxes.find((b) => b.type === "mdat");
-    const moovBeforeMdat = mdatBox && moovBox.offset < mdatBox.offset;
-
-    const moovChildren = parseBoxes(
-        inputBytes,
-        inputView,
-        moovBox.offset + getBoxHeaderSize(moovBox),
-        moovBox.end,
-    );
-    const modifications = [];
-
-    for (const trak of moovChildren.filter((b) => b.type === "trak")) {
-        const trakChildren = parseBoxes(
-            inputBytes,
-            inputView,
-            trak.offset + getBoxHeaderSize(trak),
-            trak.end,
-        );
-        const tkhdBox = trakChildren.find((b) => b.type === "tkhd");
-        const duration = tkhdBox
-            ? getTkhdDuration(inputBytes, inputView, tkhdBox.offset)
-            : 0;
-        const edtsBox = trakChildren.find((b) => b.type === "edts");
-
-        if (edtsBox) {
-            modifications.push({
-                removeStart: edtsBox.offset,
-                removeEnd: edtsBox.end,
-                trakBox: trak,
-                edtsBytes: buildEdtsAtom(duration),
-                addedDelta: 36 - edtsBox.size,
-            });
-        } else {
-            const mdiaBox = trakChildren.find((b) => b.type === "mdia");
-            const insertAt = mdiaBox ? mdiaBox.offset : trak.end;
-            modifications.push({
-                removeStart: insertAt,
-                removeEnd: insertAt,
-                trakBox: trak,
-                edtsBytes: buildEdtsAtom(duration),
-                addedDelta: 36,
-            });
-        }
-    }
-
-    if (modifications.length === 0) return null;
-
-    modifications.sort((a, b) => a.removeStart - b.removeStart);
-
-    const totalDelta = modifications.reduce(
-        (sum, mod) => sum + mod.addedDelta,
-        0,
-    );
-    const newBuffer = new ArrayBuffer(fileSize + totalDelta);
-    const newBytes = new Uint8Array(newBuffer);
-    const newView = new DataView(newBuffer);
-
-    let readPos = 0;
-    let writePos = 0;
-
-    for (const mod of modifications) {
-        newBytes.set(inputBytes.subarray(readPos, mod.removeStart), writePos);
-        writePos += mod.removeStart - readPos;
-        newBytes.set(mod.edtsBytes, writePos);
-        writePos += mod.edtsBytes.length;
-        readPos = mod.removeEnd;
-    }
-
-    newBytes.set(inputBytes.subarray(readPos), writePos);
-
-    let cumulativeDelta = 0;
-    for (const mod of modifications) {
-        updateBoxSize(
-            newView,
-            mod.trakBox.offset + cumulativeDelta,
-            mod.trakBox,
-            mod.addedDelta,
-        );
-        cumulativeDelta += mod.addedDelta;
-    }
-
-    updateBoxSize(newView, moovBox.offset, moovBox, totalDelta);
-
-    if (moovBeforeMdat) {
-        updateChunkOffsets(
-            newBytes,
-            newView,
-            moovBox.offset + getBoxHeaderSize(moovBox),
-            moovBox.offset + moovBox.size + totalDelta,
-            totalDelta,
-        );
-    }
-
-    const replacedCount = modifications.filter(
-        (m) => m.removeStart !== m.removeEnd,
-    ).length;
-    const injectedCount = modifications.length - replacedCount;
-
-    return { newBytes, newBuffer, replacedCount, injectedCount };
-}
-
-export function patchMvhdMatrix(bytes, view) {
-    const fileSize = bytes.length;
-    const topBoxes = parseBoxes(bytes, view, 0, fileSize);
-    const moovBox = topBoxes.find((b) => b.type === "moov");
-    if (!moovBox) return null;
-
-    const moovChildren = parseBoxes(
-        bytes,
-        view,
-        moovBox.offset + getBoxHeaderSize(moovBox),
-        moovBox.end,
-    );
-    const mvhdBox = moovChildren.find((b) => b.type === "mvhd");
-    if (!mvhdBox) return null;
-
-    const contentStart = mvhdBox.offset + getBoxHeaderSize(mvhdBox);
-    const version = bytes[contentStart];
-    let matrixOffset;
-    if (version === 0) {
-        matrixOffset = contentStart + 36;
-    } else if (version === 1) {
-        matrixOffset = contentStart + 48;
-    } else {
-        return null;
-    }
-
-    const matrixBOffset = matrixOffset + 4;
-    if (matrixBOffset + 4 > mvhdBox.end) return null;
-
-    const previousValue = view.getInt32(matrixBOffset, false);
-    if (previousValue !== 0) {
-        return {
-            previousValue,
-            newValue: previousValue,
-            skipped: true,
-        };
-    }
-    view.setInt32(matrixBOffset, 1, false);
-
-    return {
-        previousValue,
-        newValue: 1,
-    };
-}
 
 function downloadBuffer(data, filename, mimeType) {
     const blob =
@@ -508,10 +260,12 @@ function downloadBuffer(data, filename, mimeType) {
     anchor.download = filename;
     document.body.appendChild(anchor);
     anchor.click();
-    document.body.removeChild(anchor);
+    setTimeout(() => {
+        document.body.removeChild(anchor);
+    }, DOWNLOAD_ANCHOR_CLEANUP_MS);
     setTimeout(() => {
         URL.revokeObjectURL(objectUrl);
-    }, 1000);
+    }, DOWNLOAD_REVOKE_DELAY_MS);
 }
 
 function getStatusLabel(status) {
@@ -603,7 +357,7 @@ function renderFileList() {
         badge.textContent = getStatusLabel(item.status);
         right.appendChild(badge);
 
-        if (item.status === "pending") {
+        if (item.status === "pending" && currentFlowState !== "patching") {
             const removeBtn = document.createElement("button");
             removeBtn.className = "file-remove-btn";
             const removeIcon = document.createElement("i");
@@ -620,89 +374,95 @@ function renderFileList() {
         fileListEl.appendChild(row);
         index++;
     }
-
-    createIcons({
-        icons: ALL_ICONS,
-    });
+    refreshIcons();
 }
 
 async function addFiles(fileList) {
-    const filesArray = Array.from(fileList);
-    if (currentFlowState === "completed") {
-        selectedFiles = [];
-        currentFlowState = "idle";
-    }
-    let totalHistorySize = 0;
+    if (processingFiles || currentFlowState === "patching") return;
+    processingFiles = true;
     try {
-        totalHistorySize = await getHistoryTotalSize();
-    } catch (e) {}
-    const totalQueueSize = selectedFiles
-        .filter((f) => f.status !== "success")
-        .reduce((sum, f) => sum + f.size, 0);
-    let runningTotal = totalHistorySize + totalQueueSize;
-    if (runningTotal >= 209715200) {
-        logMessage(
-            "Upload failed: Storage limit reached (200MB). Please delete one or more items from your history persistence storage to upload files again.",
-            "error",
-        );
-        return;
-    }
-    let skipped = 0;
-    let limitReached = false;
-    for (const file of filesArray) {
-        if (!isSupportedFile(file)) {
-            skipped++;
-            continue;
+        const filesArray = Array.from(fileList);
+        if (currentFlowState === "completed") {
+            selectedFiles = [];
+            currentFlowState = "idle";
         }
-        const isDupe = selectedFiles.some(
-            (f) => f.name === file.name && f.size === file.size,
-        );
-        if (isDupe) {
+        let historySize = 0;
+        try {
+            historySize = await getHistoryTotalSize();
+        } catch (err) {
+            logMessage(`History size check failed: ${err.message}`, "warning");
+        }
+        const totalQueueSize = selectedFiles
+            .filter((f) => f.status !== "success")
+            .reduce((sum, f) => sum + f.size, 0);
+        let runningTotal = historySize + totalQueueSize;
+        if (runningTotal >= MAX_STORAGE_BYTES) {
             logMessage(
-                `Duplicate file detected: "${file.name}". Skipping.`,
-                "warning",
+                "Upload failed: Storage limit reached (200MB). Please delete one or more items from your history persistence storage to upload files again.",
+                "error",
             );
-            continue;
+            return;
         }
-        if (runningTotal + file.size > 209715200) {
-            limitReached = true;
-            break;
-        }
-        selectedFiles.push({
-            file,
-            name: file.name,
-            size: file.size,
-            status: "pending",
-            patchedBuffer: null,
-            outputName: null,
-            mimeType: null,
-            checked: true,
-        });
-        runningTotal += file.size;
-    }
-    if (limitReached) {
-        logMessage(
-            "Some files skipped: 200MB total storage limit reached. Clear your history persistence storage to upload more files.",
-            "error",
-        );
-    }
-    if (skipped > 0) logMessage(`${skipped} file(s) skipped.`, "warning");
-    renderFileList();
-    updatePatchButton();
-    if (window.innerWidth <= 900) {
-        setTimeout(() => {
-            const controlBox = document.querySelector(".control-box");
-            if (controlBox) {
-                controlBox.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                });
+        let skipped = 0;
+        let limitReached = false;
+        for (const file of filesArray) {
+            if (!isSupportedFile(file)) {
+                skipped++;
+                continue;
             }
-        }, 150);
+            const isDupe = selectedFiles.some(
+                (f) => f.name === file.name && f.size === file.size,
+            );
+            if (isDupe) {
+                logMessage(
+                    `Duplicate file detected: "${file.name}". Skipping.`,
+                    "warning",
+                );
+                continue;
+            }
+            if (runningTotal + file.size > MAX_STORAGE_BYTES) {
+                limitReached = true;
+                break;
+            }
+            selectedFiles.push({
+                file,
+                name: file.name,
+                size: file.size,
+                status: "pending",
+                patchedBuffer: null,
+                outputName: null,
+                mimeType: null,
+                checked: true,
+            });
+            runningTotal += file.size;
+        }
+        if (limitReached) {
+            logMessage(
+                "Some files skipped: 200MB total storage limit reached. Clear your history persistence storage to upload more files.",
+                "error",
+            );
+        }
+        if (skipped > 0) logMessage(`${skipped} file(s) skipped.`, "warning");
+        renderFileList();
+        updatePatchButton();
+        if (window.innerWidth <= MOBILE_BREAKPOINT) {
+            setTimeout(() => {
+                const controlBox = document.querySelector(".control-box");
+                if (controlBox) {
+                    controlBox.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                    });
+                }
+            }, MOBILE_SCROLL_DELAY_MS);
+        }
+    } finally {
+        processingFiles = false;
     }
 }
 
 function removeFile(index) {
+    if (currentFlowState === "patching") return;
     selectedFiles.splice(index, 1);
     if (selectedFiles.length === 0) {
         currentFlowState = "idle";
@@ -733,51 +493,147 @@ function updatePatchButton() {
     }
 }
 
+function parseMp4Boxes(bytes, view, start, end) {
+    const boxes = [];
+    let pos = start;
+    while (pos + 8 <= end) {
+        let sz = view.getUint32(pos, false);
+        let hdr = 8;
+        if (sz === 1) {
+            if (pos + 16 > end) break;
+            const hi = view.getUint32(pos + 8, false);
+            const lo = view.getUint32(pos + 12, false);
+            sz = hi * 0x100000000 + lo;
+            hdr = 16;
+        } else if (sz === 0) {
+            sz = end - pos;
+        }
+        if (sz < hdr || pos + sz > end) break;
+        const type = String.fromCharCode(bytes[pos+4], bytes[pos+5], bytes[pos+6], bytes[pos+7]);
+        boxes.push({ offset: pos, size: sz, type, end: pos + sz, hdr });
+        pos += sz;
+    }
+    return boxes;
+}
+
+function getDimensionsFromMp4Container(bytes, view) {
+    const top = parseMp4Boxes(bytes, view, 0, bytes.length);
+    const moov = top.find(b => b.type === 'moov');
+    if (!moov) return null;
+
+    const moovCh = parseMp4Boxes(bytes, view, moov.offset + moov.hdr, moov.end);
+    for (const trak of moovCh.filter(b => b.type === 'trak')) {
+        const tch = parseMp4Boxes(bytes, view, trak.offset + trak.hdr, trak.end);
+        const tkhd = tch.find(b => b.type === 'tkhd');
+        const mdia = tch.find(b => b.type === 'mdia');
+        if (!tkhd || !mdia) continue;
+
+        const mch = parseMp4Boxes(bytes, view, mdia.offset + mdia.hdr, mdia.end);
+        const hdlr = mch.find(b => b.type === 'hdlr');
+        if (!hdlr) continue;
+        const tt = String.fromCharCode(bytes[hdlr.offset+16], bytes[hdlr.offset+17], bytes[hdlr.offset+18], bytes[hdlr.offset+19]);
+        if (tt !== 'vide') continue;
+
+        const cs = tkhd.offset + tkhd.hdr;
+        const ver = bytes[cs];
+        const matrixOff = cs + (ver === 0 ? 40 : 52);
+        const widthOff = cs + (ver === 0 ? 76 : 88);
+
+        if (widthOff + 8 > tkhd.end) continue;
+
+        let w = view.getUint32(widthOff, false) >> 16;
+        let h = view.getUint32(widthOff + 4, false) >> 16;
+
+        if (matrixOff + 36 <= tkhd.end) {
+            const a = view.getInt32(matrixOff, false);
+            const b = view.getInt32(matrixOff + 4, false);
+            const isRotated90 = Math.abs(a) < 1000 && Math.abs(b) > 60000;
+            if (isRotated90) {
+                [w, h] = [h, w];
+            }
+        }
+
+        if (w > 0 && h > 0) return { width: w, height: h };
+    }
+    return null;
+}
+
 function getVideoDurationAndResolution(file) {
     return new Promise((resolve) => {
-        const video = document.createElement("video");
-        video.preload = "metadata";
-        video.muted = true;
-        video.playsInline = true;
-        const objectUrl = URL.createObjectURL(file);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const ab = e.target.result;
+            const bytes = new Uint8Array(ab);
+            const view = new DataView(ab);
+            const containerDims = getDimensionsFromMp4Container(bytes, view);
 
-        const timeoutId = setTimeout(() => {
-            video.onloadedmetadata = null;
-            video.onerror = null;
-            video.src = "";
-            video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(null);
-        }, 10000);
+            const video = document.createElement("video");
+            video.preload = "metadata";
+            video.muted = true;
+            video.playsInline = true;
+            let settled = false;
+            let objectUrl = null;
 
-        video.src = objectUrl;
-        video.onloadedmetadata = () => {
-            clearTimeout(timeoutId);
-            const result = {
-                duration: video.duration,
-                width: video.videoWidth,
-                height: video.videoHeight,
+            function cleanup(result) {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                video.onloadedmetadata = null;
+                video.onerror = null;
+                video.src = "";
+                video.load();
+                if (objectUrl) URL.revokeObjectURL(objectUrl);
+                resolve(result);
+            }
+
+            objectUrl = URL.createObjectURL(file);
+            const timeoutId = setTimeout(() => {
+                if (containerDims) {
+                    cleanup({ duration: 0, width: containerDims.width, height: containerDims.height });
+                } else {
+                    cleanup(null);
+                }
+            }, METADATA_TIMEOUT_MS);
+
+            video.src = objectUrl;
+            video.onloadedmetadata = () => {
+                if (settled) return;
+                const bw = video.videoWidth;
+                const bh = video.videoHeight;
+                const duration = video.duration;
+                if (containerDims && (bw === 0 || bh === 0 || !Number.isFinite(duration))) {
+                    cleanup({ duration: 0, width: containerDims.width, height: containerDims.height });
+                } else if (containerDims) {
+                    cleanup({ duration, width: containerDims.width, height: containerDims.height });
+                } else {
+                    cleanup({ duration, width: bw, height: bh });
+                }
             };
-            video.onloadedmetadata = null;
-            video.onerror = null;
-            video.src = "";
-            video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(result);
+            video.onerror = () => {
+                if (containerDims) {
+                    cleanup({ duration: 0, width: containerDims.width, height: containerDims.height });
+                } else {
+                    cleanup(null);
+                }
+            };
         };
-        video.onerror = () => {
-            clearTimeout(timeoutId);
-            video.onloadedmetadata = null;
-            video.onerror = null;
-            video.src = "";
-            video.load();
-            URL.revokeObjectURL(objectUrl);
-            resolve(null);
-        };
+        reader.onerror = () => resolve(null);
+        reader.readAsArrayBuffer(file);
     });
 }
 
 let ffmpegInstance = null;
+
+async function destroyFFmpegInstance() {
+    if (!ffmpegInstance) return;
+    try {
+        await ffmpegInstance.terminate();
+    } catch (err) {
+        console.error("FFmpeg terminate failed:", err);
+    }
+    ffmpegInstance = null;
+}
+
 async function getFFmpeg() {
     if (ffmpegInstance) return ffmpegInstance;
     ffmpegInstance = new FFmpeg();
@@ -791,28 +647,33 @@ async function getFFmpeg() {
     ffmpegInstance.on("progress", ({ progress }) => {
         setProgress(Math.round(progress * 100));
     });
-    const loadConfig = {
-        coreURL: await toBlobURL(
-            `${baseURL}/ffmpeg-core.js`,
-            "text/javascript",
-        ),
-        wasmURL: await toBlobURL(
-            `${baseURL}/ffmpeg-core.wasm`,
-            "application/wasm",
-        ),
-        classWorkerURL: await toBlobURL(
-            "https://esm.sh/@ffmpeg/ffmpeg@0.12.15/es2022/dist/esm/worker.bundle.mjs",
-            "text/javascript",
-        ),
-    };
-    if (isMultiThread) {
-        loadConfig.workerURL = await toBlobURL(
-            `${baseURL}/ffmpeg-core.worker.js`,
-            "text/javascript",
-        );
+    try {
+        const loadConfig = {
+            coreURL: await toBlobURL(
+                `${baseURL}/ffmpeg-core.js`,
+                "text/javascript",
+            ),
+            wasmURL: await toBlobURL(
+                `${baseURL}/ffmpeg-core.wasm`,
+                "application/wasm",
+            ),
+            classWorkerURL: await toBlobURL(
+                "https://esm.sh/@ffmpeg/ffmpeg@0.12.15/es2022/dist/esm/worker.bundle.mjs",
+                "text/javascript",
+            ),
+        };
+        if (isMultiThread) {
+            loadConfig.workerURL = await toBlobURL(
+                `${baseURL}/ffmpeg-core.worker.js`,
+                "text/javascript",
+            );
+        }
+        await ffmpegInstance.load(loadConfig);
+        logMessage("Video engine loaded successfully.", "success");
+    } catch (err) {
+        await destroyFFmpegInstance();
+        throw err;
     }
-    await ffmpegInstance.load(loadConfig);
-    logMessage("Video engine loaded successfully.", "success");
     return ffmpegInstance;
 }
 
@@ -834,13 +695,36 @@ function resolveInputExtension(file) {
     return ".mp4";
 }
 
+async function probeSourceFps(instance, inputName) {
+    const logLines = [];
+    const collector = ({ message }) => logLines.push(message);
+    instance.on("log", collector);
+    try {
+        await instance.exec(["-i", inputName]);
+    } catch (err) {
+        console.error('Failed to probe source FPS:', err);
+    }
+    instance.off("log", collector);
+
+    for (const line of logLines) {
+        const match = line.match(/(\d+(?:\.\d+)?)\s+fps/i);
+        if (match) {
+            const fps = parseFloat(match[1]);
+            if (fps > 0) return fps;
+        }
+    }
+    return null;
+}
+
 async function probeInputCodec(instance, inputName) {
     const logLines = [];
     const collector = ({ message }) => logLines.push(message.toLowerCase());
     instance.on("log", collector);
     try {
         await instance.exec(["-i", inputName]);
-    } catch (_) {}
+    } catch (err) {
+        console.error('Failed to probe input codec:', err);
+    }
     instance.off("log", collector);
 
     for (const line of logLines) {
@@ -874,9 +758,10 @@ async function execWithEncoder(instance, args, encoder) {
 }
 
 async function runVFI(file, width, height) {
+    let instance;
     try {
         if (isCancelled) throw new Error("Cancelled");
-        const instance = await getFFmpeg();
+        instance = await getFFmpeg();
         if (isCancelled) throw new Error("Cancelled");
         const ext = resolveInputExtension(file);
         const inputName = `input${ext}`;
@@ -955,21 +840,18 @@ async function runVFI(file, width, height) {
         logMessage("Completed frame processing.", "success");
         const data = await instance.readFile(outputName);
 
-        await instance.deleteFile(inputName);
-        await instance.deleteFile(outputName);
+        await instance.deleteFile(inputName).catch(() => {});
+        await instance.deleteFile(outputName).catch(() => {});
 
         return data.buffer;
     } catch (err) {
-        ffmpegInstance = null;
+        await destroyFFmpegInstance();
         throw err;
     }
 }
 
 async function patchSingleFile(item) {
     const enableInterpolation = document.getElementById("enableInterpolation");
-    let workingBuffer;
-    let workingBytes;
-    let workingView;
 
     if (enableInterpolation?.checked) {
         logMessage("Starting VFI Engine for frame rate upgrade...", "info");
@@ -980,72 +862,253 @@ async function patchSingleFile(item) {
             throw new Error("Could not parse video metadata.");
         }
 
-        if (videoInfo.duration > 30) {
+        if (videoInfo.duration > MAX_VIDEO_DURATION_SECONDS) {
             throw new Error(
                 `Video duration of ${Math.round(videoInfo.duration)}s exceeds the strict 30s limit.`,
             );
         }
 
-        workingBuffer = await runVFI(
+        const workingBuffer = await runVFI(
             item.file,
             videoInfo.width,
             videoInfo.height,
         );
-        workingBytes = new Uint8Array(workingBuffer);
-        workingView = new DataView(workingBuffer);
-    } else {
-        if (isCancelled) throw new Error("Cancelled");
-        workingBuffer = await item.file.arrayBuffer();
-        workingBytes = new Uint8Array(workingBuffer);
-        workingView = new DataView(workingBuffer);
-    }
+        const workingBytes = new Uint8Array(workingBuffer);
+        const workingView = new DataView(workingBuffer);
 
-    const mimeType = getMimeType(item.file);
-    const outputName = getOutputFilename(item.file);
+        const mimeType = getMimeType(item.file);
+        const outputName = getOutputFilename(item.file);
 
-    let finalBuffer = workingBuffer;
-    let finalBytes = workingBytes;
-    let finalView = workingView;
+        let finalBuffer = workingBuffer;
+        let finalBytes = workingBytes;
+        let finalView = workingView;
 
-    const elstResult = rebuildWithElstBypass(workingBytes, workingView);
-    if (elstResult) {
-        finalBuffer = elstResult.newBuffer;
-        finalBytes = elstResult.newBytes;
-        finalView = new DataView(finalBuffer);
-
-        if (elstResult.replacedCount > 0 && elstResult.injectedCount > 0) {
+        const elstResult = rebuildWithElstBypass(workingBytes, workingView);
+        if (elstResult) {
+            finalBuffer = elstResult.newBuffer;
+            finalBytes = elstResult.newBytes;
+            finalView = new DataView(finalBuffer);
             logMessage(
-                `  [Pass 1/2] ZeroLoss Track Bypass: Replaced ${elstResult.replacedCount} and injected ${elstResult.injectedCount} elst atom(s).`,
-                "success",
-            );
-        } else if (elstResult.replacedCount > 0) {
-            logMessage(
-                `  [Pass 1/2] ZeroLoss Track Bypass: Replaced ${elstResult.replacedCount} existing elst atom(s).`,
+                `  [Pass 1/5] ZeroLoss Track Bypass: Applied.`,
                 "success",
             );
         } else {
             logMessage(
-                `  [Pass 1/2] ZeroLoss Track Bypass: Injected ${elstResult.injectedCount} new elst atom(s).`,
-                "success",
+                "  [Pass 1/5] ZeroLoss Track Bypass skipped.",
+                "warning",
             );
         }
+
+        const quantumResult = patchMvhdMatrix(finalBytes, finalView);
+        if (quantumResult && !quantumResult.skipped) {
+            logMessage(`  [Pass 2/5] Quantum Matrix: Patched.`, "success");
+        } else {
+            logMessage("  [Pass 2/5] Quantum Matrix skipped.", "warning");
+        }
+
+        const udtaResult = stripUdtaAtom(finalBytes, finalView);
+        if (udtaResult) {
+            finalBuffer = udtaResult.newBuffer;
+            finalBytes = udtaResult.newBytes;
+            finalView = new DataView(finalBuffer);
+            logMessage("  [Pass 3/5] Udta Strip: Applied.", "success");
+        } else {
+            logMessage("  [Pass 3/5] Udta Strip skipped.", "warning");
+        }
+
+        const tkhdResult = stripTkhdMatrix(finalBytes, finalView);
+        if (tkhdResult.patched) {
+            logMessage("  [Pass 4/5] Tkhd Matrix Zero: Applied.", "success");
+        } else {
+            logMessage("  [Pass 4/5] Tkhd Matrix Zero skipped.", "warning");
+        }
+
+        logMessage("  [Pass 5/5] Finalization complete.", "success");
+
+        return { finalBuffer, outputName, mimeType };
+    }
+
+    if (isCancelled) throw new Error("Cancelled");
+
+    const videoInfo = await getVideoDurationAndResolution(item.file);
+    if (isCancelled) throw new Error("Cancelled");
+    if (!videoInfo) {
+        throw new Error("Could not parse video metadata.");
+    }
+
+    const isLandscape = videoInfo.width > videoInfo.height;
+    const scaleFilter = isLandscape ? "scale=-2:1080" : "scale=1080:-2";
+
+    logMessage(
+        `  Source: ${videoInfo.width}x${videoInfo.height} (${isLandscape ? "landscape" : "portrait"}) → ${isLandscape ? "H:1080" : "W:1080"} adaptive`,
+        "info",
+    );
+
+    const mimeType = getMimeType(item.file);
+    const outputName = getOutputFilename(item.file);
+
+    logMessage("  [Pass 1/5] Running container reencode...", "info");
+
+    const instance = await getFFmpeg();
+    if (isCancelled) throw new Error("Cancelled");
+
+    const ext = resolveInputExtension(item.file);
+    const inputName = `input${ext}`;
+    const tempFileName = `temp${ext}`;
+    const outputFileName = `output${ext}`;
+
+    await instance.writeFile(inputName, await fetchFile(item.file));
+    if (isCancelled) {
+        await instance.deleteFile(inputName).catch(() => {});
+        throw new Error("Cancelled");
+    }
+
+    await instance.exec([
+        "-i",
+        inputName,
+        "-vf",
+        scaleFilter,
+        "-c:v",
+        "libx264",
+        "-profile:v",
+        "main",
+        "-level",
+        "4.2",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "14261k",
+        "-maxrate",
+        "15000k",
+        "-bufsize",
+        "28000k",
+        "-g",
+        "30",
+        "-bf",
+        "2",
+        "-refs",
+        "1",
+        "-preset",
+        "medium",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "250k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-video_track_timescale",
+        "90000",
+        "-movflags",
+        "+faststart",
+        tempFileName,
+    ]);
+
+    if (isCancelled) {
+        await instance.deleteFile(inputName).catch(() => {});
+        await instance.deleteFile(tempFileName).catch(() => {});
+        throw new Error("Cancelled");
+    }
+
+    await instance.exec([
+        "-i",
+        tempFileName,
+        "-c",
+        "copy",
+        "-map_metadata",
+        "-1",
+        "-metadata:s:v",
+        "language=und",
+        "-metadata:s:a",
+        "language=und",
+        "-metadata:s:v",
+        "handler_name=VideoHandler",
+        "-metadata:s:a",
+        "handler_name=SoundHandler",
+        "-metadata",
+        "comment=KwjYwI2DziQ8It5PyJGJgQ",
+        "-movflags",
+        "+faststart",
+        outputFileName,
+    ]);
+
+    await instance.deleteFile(tempFileName).catch(() => {});
+
+    if (isCancelled) {
+        await instance.deleteFile(inputName).catch(() => {});
+        await instance.deleteFile(outputFileName).catch(() => {});
+        throw new Error("Cancelled");
+    }
+
+    const data = await instance.readFile(outputFileName);
+    await instance.deleteFile(inputName).catch(() => {});
+    await instance.deleteFile(outputFileName).catch(() => {});
+
+    logMessage("  [Pass 1/7] Container transform complete.", "success");
+
+    let finalBuffer = data.buffer;
+    let finalBytes = new Uint8Array(finalBuffer);
+    let finalView = new DataView(finalBuffer);
+
+    const elstResult = rebuildWithElstBypass(finalBytes, finalView);
+    if (elstResult) {
+        finalBuffer = elstResult.newBuffer;
+        finalBytes = elstResult.newBytes;
+        finalView = new DataView(finalBuffer);
+        logMessage(
+            `  [Pass 2/7] ZeroLoss Track Bypass: Applied.`,
+            "success",
+        );
     } else {
-        logMessage("  [Pass 1/2] ZeroLoss Track Bypass skipped.", "warning");
+        logMessage(
+            "  [Pass 2/7] ZeroLoss Track Bypass skipped.",
+            "warning",
+        );
     }
 
     const quantumResult = patchMvhdMatrix(finalBytes, finalView);
     if (quantumResult && !quantumResult.skipped) {
-        logMessage(
-            `  [Pass 2/2] Quantum Matrix: Patched display matrix_b from ${quantumResult.previousValue} to ${quantumResult.newValue}.`,
-            "success",
-        );
-    } else if (quantumResult?.skipped) {
-        logMessage(
-            "  [Pass 2/2] Quantum Matrix: Rotation matrix preserved (portrait video detected).",
-            "info",
-        );
+        logMessage(`  [Pass 3/7] Quantum Matrix: Patched.`, "success");
     } else {
-        logMessage("  [Pass 2/2] Quantum Matrix patch skipped.", "warning");
+        logMessage("  [Pass 3/7] Quantum Matrix skipped.", "warning");
+    }
+
+    const udtaResult = stripUdtaAtom(finalBytes, finalView);
+    if (udtaResult) {
+        finalBuffer = udtaResult.newBuffer;
+        finalBytes = udtaResult.newBytes;
+        finalView = new DataView(finalBuffer);
+        logMessage("  [Pass 4/7] Udta Strip: Applied.", "success");
+    } else {
+        logMessage("  [Pass 4/7] Udta Strip skipped.", "warning");
+    }
+
+    const tkhdResult = stripTkhdMatrix(finalBytes, finalView);
+    if (tkhdResult.patched) {
+        logMessage("  [Pass 5/7] Tkhd Matrix Zero: Applied.", "success");
+    } else {
+        logMessage("  [Pass 5/7] Tkhd Matrix Zero skipped.", "warning");
+    }
+
+    const inflateResult = inflateSampleTableVideo(finalBytes, finalView);
+    if (inflateResult) {
+        finalBuffer = inflateResult.newBuffer;
+        finalBytes = inflateResult.newBytes;
+        finalView = new DataView(finalBuffer);
+        logMessage("  [Pass 6/7] Frame Density Inflation: Applied.", "success");
+    } else {
+        logMessage("  [Pass 6/7] Frame Density Inflation skipped.", "warning");
+    }
+
+    const commentResult = injectCommentUdta(finalBytes, finalView, "KwjYwI2DziQ8It5PyJGJgQ");
+    if (commentResult) {
+        finalBuffer = commentResult.newBuffer;
+        finalBytes = commentResult.newBytes;
+        finalView = new DataView(finalBuffer);
+        logMessage("  [Pass 7/7] Comment Udta Injection: Applied.", "success");
+    } else {
+        logMessage("  [Pass 7/7] Comment Udta Injection skipped.", "warning");
     }
 
     return { finalBuffer, outputName, mimeType };
@@ -1071,7 +1134,7 @@ async function downloadSelectedFiles() {
         item.checked = false;
 
         if (i < selectedToDownload.length - 1) {
-            await new Promise((r) => setTimeout(r, 300));
+            await new Promise((r) => setTimeout(r, DOWNLOAD_INTERVAL_MS));
         }
     }
 
@@ -1089,17 +1152,12 @@ fileInput.addEventListener("change", (event) => {
     fileInput.value = "";
 });
 
-clearBtn.addEventListener("click", (event) => {
+clearBtn.addEventListener("click", async (event) => {
     event.stopPropagation();
     if (currentFlowState === "patching") {
         isCancelled = true;
         logMessage("Cancelling active interpolation progress...", "warning");
-        if (ffmpegInstance) {
-            try {
-                ffmpegInstance.terminate();
-            } catch (err) {}
-            ffmpegInstance = null;
-        }
+        await destroyFFmpegInstance();
         return;
     }
     selectedFiles = [];
@@ -1125,6 +1183,30 @@ dropZone.addEventListener("drop", (event) => {
     if (event.dataTransfer.files.length > 0) addFiles(event.dataTransfer.files);
 });
 
+let wakeLock = null;
+
+async function acquireWakeLock() {
+    if (!("wakeLock" in navigator)) return;
+    try {
+        wakeLock = await navigator.wakeLock.request("screen");
+    } catch (_) {
+        wakeLock = null;
+    }
+}
+
+function releaseWakeLock() {
+    if (wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+    }
+}
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && currentFlowState === "patching" && !wakeLock) {
+        acquireWakeLock();
+    }
+});
+
 patchBtn.addEventListener("click", async () => {
     if (currentFlowState === "completed") {
         await downloadSelectedFiles();
@@ -1140,6 +1222,7 @@ patchBtn.addEventListener("click", async () => {
     clearBtn.innerText = "Cancel";
     clearBtn.disabled = false;
     showProgress();
+    await acquireWakeLock();
 
     isCancelled = false;
     let successCount = 0;
@@ -1168,12 +1251,19 @@ patchBtn.addEventListener("click", async () => {
             item.checked = true;
             successCount++;
 
-            if (result.finalBuffer.byteLength <= 209715200) {
+            if (result.finalBuffer && result.finalBuffer.byteLength !== undefined &&
+                result.finalBuffer.byteLength <= MAX_STORAGE_BYTES) {
                 try {
-                    const thumbnail = await captureVideoFrame(item.file);
+                    if (isCancelled) break;
                     const blob = new Blob([result.finalBuffer], {
                         type: result.mimeType,
                     });
+                    let thumbnail = await captureVideoFrame(blob);
+                    if (isCancelled) break;
+                    if (!thumbnail) {
+                        thumbnail = await captureVideoFrame(item.file);
+                        if (isCancelled) break;
+                    }
                     await saveRecord({
                         id: self.crypto.randomUUID(),
                         name: result.outputName,
@@ -1196,7 +1286,7 @@ patchBtn.addEventListener("click", async () => {
                 if (isCancelled) {
                     break;
                 }
-                await new Promise((r) => setTimeout(r, 600));
+                await new Promise((r) => setTimeout(r, PATCH_INTERVAL_MS));
                 if (isCancelled) {
                     break;
                 }
@@ -1223,15 +1313,18 @@ patchBtn.addEventListener("click", async () => {
         currentFlowState = "idle";
         setProgress(0);
         hideProgress();
+        releaseWakeLock();
         clearBtn.innerText = "Clear";
         logMessage("Interpolation progress cancelled by user.", "warning");
         renderFileList();
         updatePatchButton();
+        refreshIcons();
         return;
     }
 
     currentFlowState = "completed";
     setProgress(100);
+    releaseWakeLock();
     logMessage(
         `Done. ${successCount}/${pendingItems.length} file(s) patched successfully.`,
         successCount === pendingItems.length ? "success" : "warning",
@@ -1242,6 +1335,7 @@ patchBtn.addEventListener("click", async () => {
     clearBtn.disabled = false;
     renderFileList();
     updatePatchButton();
+    refreshIcons();
 });
 
 async function renderHistoryList() {
@@ -1251,6 +1345,7 @@ async function renderHistoryList() {
 
     if (records.length === 0) {
         historyList.innerHTML = `<div class="history-item-empty" style="font-size: 10px; color: #657c6a; text-align: center; padding: 12px 0; font-family: 'JetBrains Mono', monospace;">No history records found</div>`;
+        refreshIcons();
         return;
     }
 
@@ -1260,7 +1355,7 @@ async function renderHistoryList() {
 
         const thumb = document.createElement("div");
         thumb.className = "history-thumbnail";
-        if (record.thumbnail) {
+        if (record.thumbnail && record.thumbnail.startsWith(SAFE_THUMBNAIL_PREFIX)) {
             const img = document.createElement("img");
             img.src = record.thumbnail;
             img.alt = "preview";
@@ -1320,10 +1415,7 @@ async function renderHistoryList() {
 
         historyList.appendChild(item);
     }
-
-    createIcons({
-        icons: ALL_ICONS,
-    });
+    refreshIcons();
 }
 
 historyHeader.addEventListener("click", () => {
@@ -1362,6 +1454,35 @@ if (enableInterpolation && vfiModal) {
 
     vfiModal.addEventListener("click", (e) => {
         if (e.target === vfiModal) cancelModal();
+    });
+}
+
+const tiktokModal = document.getElementById("tiktokModal");
+const tiktokStudioBtn = document.getElementById("tiktokStudioBtn");
+const closeTiktokModalBtn = document.getElementById("closeTiktokModalBtn");
+const cancelTiktokModalBtn = document.getElementById("cancelTiktokModalBtn");
+const confirmTiktokBtn = document.getElementById("confirmTiktokBtn");
+
+function isMobileDevice() {
+    return window.innerWidth <= MOBILE_BREAKPOINT || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
+if (tiktokStudioBtn && tiktokModal) {
+    tiktokStudioBtn.addEventListener("click", (e) => {
+        if (isMobileDevice()) {
+            e.preventDefault();
+            tiktokModal.classList.add("active");
+        }
+    });
+
+    const closeTiktokModal = () => tiktokModal.classList.remove("active");
+
+    closeTiktokModalBtn?.addEventListener("click", closeTiktokModal);
+    cancelTiktokModalBtn?.addEventListener("click", closeTiktokModal);
+    confirmTiktokBtn?.addEventListener("click", closeTiktokModal);
+
+    tiktokModal.addEventListener("click", (e) => {
+        if (e.target === tiktokModal) closeTiktokModal();
     });
 }
 

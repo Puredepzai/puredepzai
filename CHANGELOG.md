@@ -2,6 +2,56 @@
 
 All notable changes to the NoBlur project are documented in this file.
 
+## [2.0.0] - 2026-06-16
+
+### Added
+- **TikTok Frame Density Bypass:** Non-Interpolation path now inflates the MP4 sample table 10x — a 448-frame 30fps clip is rewritten to declare 4480 virtual frames (448 real + 4032 dummy 8-byte samples whose chunk offsets point to a safe padding region at EOF). TikTok detects this as high-density/300fps-equivalent content and skips heavy recompression, preserving original visual quality.
+- **Modular Binary Patching Architecture:** Extracted all MP4 binary patching functions from `app.js` into four dedicated ES modules under `src/`:
+  - `src/mp4-boxes.mjs` — core box parsing, size update, chunk offset helpers
+  - `src/mp4-patches.mjs` — edts/elst rebuild, mvhd matrix patch
+  - `src/mp4-strip.mjs` — udta strip, comment udta injection, tkhd matrix reset
+  - `src/mp4-inflate.mjs` — sample table inflation (Frame Density Bypass)
+- **7-Pass Non-Interpolation Pipeline:** Expanded from 3 passes to 7 passes:
+  1. FFmpeg container reencode (libx264, CBR 14261k, aac 250k, timescale 90000)
+  2. ZeroLoss Track Bypass (edts/elst with video mediaTime offset 6000)
+  3. Quantum Matrix Patch (mvhd matrix_b)
+  4. Udta Strip (removes FFmpeg encoder tag)
+  5. Tkhd Matrix Reset (identity matrix on all tracks)
+  6. Frame Density Inflation (10x sample table expansion)
+  7. Comment Udta Injection (Apple iTunes-style ©cmt tag)
+- **H.264 Output Profile:** Switched Non-Interpolation encoder from libx265 CRF 18 to libx264 CBR 14261k, Main profile Level 4.2, matching the reference output profile that bypasses TikTok compression.
+- **Standard Video Timescale:** Non-Interpolation path now forces `-video_track_timescale 90000` and injects edit list `mediaTime=6000` on the video track for proper AV sync alignment.
+- **MP4 Container Dimension Parser:** Added `getDimensionsFromMp4Container` to read video width/height/rotation directly from the `tkhd` box binary. Replaces reliance on browser `<video>` element for dimension detection, fixing orientation errors on HEVC/H.265 inputs and videos with rotation metadata.
+- **Output Thumbnail Capture:** History thumbnails are now captured from the processed output buffer instead of the original input file, fixing blank thumbnails on HEVC and rotated video inputs.
+
+### Changed
+- **Non-Interpolation Output Format:** Replaced libx265 CRE encoding with libx264 CBR pipeline. Output is now H.264 Main@L4.2 with standard timescale, matching professionally encoded reference files.
+- **Rotation Handling:** Removed `-noautorotate` FFmpeg flag. FFmpeg now bakes rotation metadata into pixel data during encode, producing correctly oriented output without Display Matrix side data artifacts.
+- **stsc Patch for Multi-FPS Inputs:** `inflateSampleTableVideo` now also patches the `stsc` (Sample-to-Chunk) table by appending a terminal entry `{first_chunk: origCount+1, spc: 1}` to prevent sample count mismatches on 60fps and variable-fps inputs.
+
+### Fixed
+- **Audio Corruption After Inflation:** Fixed critical bug where audio chunk offsets were not shifted after moov expansion during sample table inflation, causing audio decode failures on all inflated files.
+- **Portrait/Landscape Detection for HEVC:** Browser `<video>` cannot decode HEVC on most platforms, causing it to report 0×0 or wrong dimensions. Container-level dimension parsing now correctly identifies orientation for HEVC inputs.
+
+
+
+### Added
+- **Adaptive Rotation Scaling:** Interpolation OFF path now detects video orientation and applies adaptive scaling — landscape videos scale to height 1080px, portrait videos scale to width 1080px, preserving aspect ratio without black padding bars.
+- **Full 3-Pass Pipeline for Non-VFI:** Extended the interpolation OFF path from 1-pass to 3-pass architecture, adding ZeroLoss Track Bypass (edts/elst atom patching) and Quantum Matrix (mvhd display matrix) after FFmpeg re-encoding, matching the VFI path's completeness.
+
+### Changed
+- **Container Reencode (Pass 1/3):** Clarified terminology — the FFmpeg pass performs re-encoding (`-c:v libx265`), not remuxing, to accurately reflect the transcode operation.
+
+## [1.3.0] - 2026-06-15
+
+### Changed
+- **FFmpeg-Native Container Reencode:** Added FFmpeg.wasm re-encoding pass using libx265 with CRF 18, bitstream filters `setts=ts='2*TS'` on both video and audio tracks, and full metadata strip for the interpolation OFF path.
+- **Video Timing Normalization:** Uses `-bsf:v setts=ts='2*TS'` to double all video presentation timestamps, converting 60fps source to 30fps playback (2x slow-motion).
+- **Audio Timing Normalization:** Uses `-bsf:a setts=ts='2*TS'` to double all audio timestamps, synchronizing audio duration with the re-encoded video duration.
+- **Metadata Strip:** Uses `-map_metadata -1` to strip all source metadata including GPS location, device identifiers, Android version, and capture frame rate tags.
+- **Track Timescale Lock:** Uses `-video_track_timescale 90000` to normalize the video track timescale to the standard 90kHz value.
+- **VFI Path Preserved:** The 60fps VFI interpolation path (enabled via checkbox) retains the original ZeroLoss + Quantum Matrix pipeline as before.
+
 ## [1.2.0] - 2026-05-26
 
 ### Added

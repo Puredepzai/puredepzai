@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NoBlur — Post TikTok Videos Without the Blur</title>
-  <meta name="description" content="NoBlur - Post TikTok Videos Without the Blur. Dual-layered metadata patch engine to preserve video quality when uploading to TikTok.">
+  <meta name="description" content="NoBlur - Post TikTok Videos Without the Blur. FFmpeg re-encode and frame density bypass engine to preserve video quality when uploading to TikTok.">
   <link href="https://fonts.googleapis.com/css2?family=TikTok+Sans:wght@300..900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect x=%2212%22 y=%2212%22 width=%2276%22 height=%2276%22 rx=%2216%22 fill=%22%23000000%22/><rect x=%224%22 y=%224%22 width=%2276%22 height=%2276%22 rx=%2216%22 fill=%22%23facc15%22 stroke=%22%23000000%22 stroke-width=%226%22/><text x=%2242%22 y=%2260%22 font-family=%22'JetBrains Mono', monospace%22 font-weight=%22900%22 font-size=%2252%22 fill=%22%23000000%22 text-anchor=%22middle%22>N</text></svg>">
   <link rel="stylesheet" href="style.css">
@@ -28,30 +28,25 @@
 
   <div class="container">
 
-    <div class="info-note">
-      <i data-lucide="info"></i>
-      <span>You must upload the patched video via TikTok Studio on PC/Desktop or desktop mode browser to ensure the quality-preservation bypass works perfectly.</span>
-    </div>
-
     <div class="panel panel-left">
       <div class="header">
         <div class="header-title">No<span>Blur</span></div>
-        <div class="header-subtitle">Post TikTok Videos Without the Blur &middot; Dual-layered metadata patch engine.</div>
+        <div class="header-subtitle">Post TikTok Videos Without the Blur &middot; FFmpeg re-encode &amp; frame density bypass engine.</div>
       </div>
 
       <div class="control-box">
         <div class="system-stats">
           <div class="stat-item">
-            <span class="stat-label">ENHANCER ENGINE</span>
+            <span class="stat-label">PROCESSING ENGINE</span>
             <span class="stat-value text-accent">ACTIVE</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">MODE</span>
-            <span class="stat-value">DUAL HYBRID</span>
+            <span class="stat-label">METHOD</span>
+            <span class="stat-value">FFMPEG RE-ENCODE</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">TARGET</span>
-            <span class="stat-value text-success">ZEROLOSS + QUANTUM MATRIX</span>
+            <span class="stat-label">OUTPUT</span>
+            <span class="stat-value stat-value-small text-success">1080p H.264 + FRAME DENSITY INFLATION + METADATA STRIP</span>
           </div>
         </div>
 
@@ -68,18 +63,6 @@
             </label>
           </div>
           <div class="interpolator-info">
-            <div class="info-row">
-              <span class="info-label">PRESET:</span>
-              <span class="info-val text-accent">HYBRID SPEED+ACCURACY</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">MAX QUALITY:</span>
-              <span class="info-val text-accent">1080P @ 60FPS</span>
-            </div>
-            <div class="info-row">
-              <span class="info-label">MAX DURATION:</span>
-              <span class="info-val text-danger">30 SECONDS (STRICT)</span>
-            </div>
             <div class="interpolator-note">
               <i data-lucide="cpu"></i>
               <span>Processing speed depends on your device hardware. Multi-core CPU recommended for faster results.</span>
@@ -114,6 +97,13 @@
             <button class="btn btn-patch" id="patchBtn" disabled>
               <span>Patch Videos</span>
             </button>
+          </div>
+          <a class="btn btn-tiktok" id="tiktokStudioBtn" href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" rel="noopener noreferrer">
+            Upload to TikTok Studio
+          </a>
+          <div class="upload-note">
+            <i data-lucide="info"></i>
+            <span>Upload patched video via TikTok Studio web to ensure quality-preservation bypass works.</span>
           </div>
           <div class="progress-track" id="progressTrack">
             <div class="progress-bar" id="progressBar"></div>
@@ -193,6 +183,37 @@
       </div>
     </div>
   </div>
+  <div class="modal-overlay" id="tiktokModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-header-left">
+          <i data-lucide="upload"></i>
+          <span class="modal-title">UPLOAD TO TIKTOK STUDIO</span>
+        </div>
+        <button class="modal-close-btn" id="closeTiktokModalBtn">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-warning-block">
+          <i data-lucide="info"></i>
+          <span>Enable Desktop Mode First</span>
+        </div>
+        <ul class="modal-warning-list">
+          <li>TikTok Studio upload only works in desktop mode browser.</li>
+          <li>On Chrome: tap the 3-dot menu → check "Desktop site".</li>
+          <li>On Safari: tap "AA" in the address bar → "Request Desktop Website".</li>
+          <li>On Samsung Browser: tap menu → "Desktop view".</li>
+          <li>After enabling, tap the button below to open TikTok Studio.</li>
+        </ul>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="cancelTiktokModalBtn">Cancel</button>
+        <a class="modal-btn modal-btn-confirm" id="confirmTiktokBtn" href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" rel="noopener noreferrer">Open TikTok Studio</a>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>
