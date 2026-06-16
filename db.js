@@ -95,7 +95,8 @@ export async function clearAllRecords() {
 
 export async function pruneOldRecords() {
     const db = await openDB();
-    const expiryTime = Date.now() - 43200000;
+    const HISTORY_EXPIRY_MS = 43200000;
+    const expiryTime = Date.now() - HISTORY_EXPIRY_MS;
     return new Promise((resolve, reject) => {
         const transaction = db.transaction(STORE_NAME, "readwrite");
         const store = transaction.objectStore(STORE_NAME);
