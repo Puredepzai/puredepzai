@@ -26,7 +26,10 @@ function parseChangelog(markdown) {
         const changes = changesSection
             .split("\n")
             .filter((line) => line.startsWith("- "))
-            .map((line) => line.substring(2).trim());
+            .map((line) => {
+                const raw = line.substring(2).trim();
+                return raw.replace(/^\*\*[^:]+:\*\*\s*/, "");
+            });
 
         return { version, date, changes };
     });

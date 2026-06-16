@@ -30,7 +30,6 @@ function markAsSeen(version) {
 function renderPanel(latest) {
     const panel = document.createElement("div");
     panel.className = "changelog-panel changelog-panel-hidden";
-    panel.setAttribute("aria-expanded", "false");
 
     const header = document.createElement("div");
     header.className = "changelog-header";
@@ -89,6 +88,7 @@ function renderBadge(isNew, version) {
     badge.className = "changelog-badge";
     badge.setAttribute("role", "button");
     badge.setAttribute("aria-label", "View changelog");
+    badge.setAttribute("aria-expanded", "false");
     badge.setAttribute("tabindex", "0");
 
     if (isNew) {
@@ -107,10 +107,10 @@ function togglePanel(panel, badge) {
 
     if (isOpen) {
         panel.classList.add("changelog-panel-hidden");
-        panel.setAttribute("aria-expanded", "false");
+        badge.setAttribute("aria-expanded", "false");
     } else {
         panel.classList.remove("changelog-panel-hidden");
-        panel.setAttribute("aria-expanded", "true");
+        badge.setAttribute("aria-expanded", "true");
 
         const latest = getLatestVersion();
         if (latest) {

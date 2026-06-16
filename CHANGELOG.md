@@ -1,21 +1,84 @@
-## [2.0.0] - 2025-06-10
+# Changelog
 
-- TikTok frame density bypass engine
-- 7-pass processing pipeline
-- Modular MP4 patching system
-- 5x density default & 2K resolution option
-- Wake lock & TikTok Studio button
+All notable changes to the NoBlur project are documented in this file.
 
-## [1.2.0] - 2025-05-20
+## [2.0.0] - 2026-06-16
 
-- 64-bit edit list support
-- Documentation updates
+### Added
+- **TikTok Frame Density Bypass:** Non-Interpolation path inflates the MP4 sample table — a clip is rewritten to declare more virtual frames (real samples kept + dummy 8-byte samples whose chunk offsets point to a safe padding region at EOF). TikTok detects this as high-density content and skips heavy recompression, preserving original visual quality.
+- **Selectable Density Multiplier (5x default):** The inflation multiplier is configurable. 5x is the confirmed sweetspot — it passes TikTok compression while keeping the dummy-frame tail (and the brief end-of-video freeze) short. 10x also works but produces a longer freeze.
+- **Output Resolution Selector (1080p / 2K):** Output can be scaled to 1080p or 2K (1440p) via a UI dropdown. Bitrate auto-scales with resolution — 1080p uses 14261k, 2K uses 25000k. Both confirmed to bypass TikTok compression.
+- **Modular Binary Patching Architecture:** Extracted all MP4 binary patching functions from `app.js` into four dedicated ES modules under `src/`.
+- **7-Pass Non-Interpolation Pipeline:** Expanded from 3 passes to 7 passes.
+- **Aligned Interpolation Pipeline:** The 60fps VFI path now shares the same metadata treatment — timescale 90000, AAC 250k audio, udta strip, tkhd matrix reset, and comment udta injection.
+- **H.264 Output Profile:** Switched Non-Interpolation encoder from libx265 CRF 18 to libx264 CBR, Main profile Level 4.2, matching the reference output profile that bypasses TikTok compression.
+- **MP4 Container Dimension Parser:** Added `getDimensionsFromMp4Container` to read video width/height/rotation directly from the `tkhd` box binary.
+- **Output Thumbnail Capture:** History thumbnails are now captured from the processed output buffer instead of the original input file.
+- **Screen Wake Lock:** The screen stays awake during processing on supported mobile browsers.
+- **Upload to TikTok Studio Button:** Added a direct link to TikTok Studio web upload, with a mobile-only modal guiding users to enable desktop mode first.
 
-## [1.1.0] - 2025-05-10
+### Changed
+- **Non-Interpolation Output Format:** Replaced libx265 CRF encoding with libx264 CBR pipeline.
+- **Rotation Handling:** Removed `-noautorotate` FFmpeg flag. FFmpeg now bakes rotation metadata into pixel data during encode.
+- **UI Copy & Layout:** Updated header subtitle and system stats to reflect the re-encode + frame density engine.
 
-- Hybrid interpolator
-- Bug fixes and stability improvements
+### Fixed
+- **Audio Corruption After Inflation:** Fixed critical bug where audio chunk offsets were not shifted after moov expansion during sample table inflation.
+- **Portrait/Landscape Detection for HEVC:** Container-level dimension parsing now correctly identifies orientation for HEVC inputs.
 
-## [1.0.0] - 2025-04-28
+## [1.4.0] - 2026-06-16
 
-- Initial release
+### Added
+- **Adaptive Rotation Scaling:** Interpolation OFF path now detects video orientation and applies adaptive scaling.
+- **Full 3-Pass Pipeline for Non-VFI:** Extended the interpolation OFF path from 1-pass to 3-pass architecture.
+
+### Changed
+- **Container Reencode (Pass 1/3):** Clarified terminology — the FFmpeg pass performs re-encoding, not remuxing.
+
+## [1.3.0] - 2026-06-15
+
+### Changed
+- **FFmpeg-Native Container Reencode:** Added FFmpeg.wasm re-encoding pass using libx265 with CRF 18.
+- **Video Timing Normalization:** Uses `setts=ts='2*TS'` to convert 60fps source to 30fps playback.
+- **Audio Timing Normalization:** Synchronizes audio duration with the re-encoded video duration.
+- **Metadata Strip:** Strips all source metadata including GPS location, device identifiers.
+- **Track Timescale Lock:** Normalizes the video track timescale to the standard 90kHz value.
+- **VFI Path Preserved:** The 60fps VFI interpolation path retains the original ZeroLoss + Quantum Matrix pipeline.
+
+## [1.2.0] - 2026-05-26
+
+### Added
+- **64-Bit Edit List Support:** Dynamically writes version 1 `elst` boxes with 64-bit track durations.
+- **Duplicate Upload Warning Notice:** Visible log alerts inside `addFiles` for duplicate files.
+- **Same-Codec Output Alignment:** Matches output encoder/codec properties with the detected input codec.
+- **Fast Motion-Compensated VFI:** Upgraded from linear blending to bilateral motion-compensated interpolation.
+- **VFI Workload Lightening:** Integrated `mpdecimate` filters to drop duplicate frames prior to interpolation.
+
+### Fixed
+- **Active VFI Worker Interruption:** Instant termination of active WebAssembly worker threads on cancellation.
+- **Portrait Video Rotation Protection:** Skips display matrix patching if a non-identity matrix is present.
+- **Stream-Specific Codec Probing:** Corrected input codec detection to target exact video stream logs.
+- **Lightweight DB Size Audits:** Cursor-based IndexedDB storage footprint calculation.
+
+## [1.1.0] - 2026-05-25
+
+### Added
+- **60FPS Hybrid Interpolator (Beta):** Client-side video frame rate interpolation using Web Worker-based FFmpeg.wasm.
+- **Vite Dev Server COOP/COEP Headers:** Cross-origin isolation natively on localhost.
+- **Hardware Decoder Memory Guard:** Explicitly releases `<video>` memory to prevent tab crashes.
+- **10-Second Metadata Timeout:** Strict timeout limits to prevent hangs on corrupted media files.
+- **Loopback Service Worker Bypass:** Proactive cleanup sequence for sticky service worker headers.
+
+### Fixed
+- **FFmpeg Crash State Recovery:** Added `try-catch` resetting to safely reboot the FFmpeg engine on crash.
+- **Always-Even & Adaptive Full HD Scaling:** Dynamic portrait/landscape aspect-ratio Full HD boundaries.
+- **Safe Database Transactions:** Replaced insecure dynamic indexing with explicit store references.
+
+## [1.0.0] - 2026-05-24
+
+### Added
+- **Initial Release:** NoBlur premium container patch utility.
+- **ZeroLoss Track Bypass:** Automated metadata parsing injecting `edts`/`elst` atom hierarchy.
+- **Quantum Matrix Patch:** Big-endian integer manipulation patching the `mvhd` display matrix.
+- **Tactile Neo-Brutalist Layout:** Premium high-contrast dark card interface with flat offset shadows.
+- **Local Persistence Storage:** IndexedDB local history tracking with 12-hour pruning and 200MB limit.
