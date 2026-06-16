@@ -5,35 +5,40 @@ All notable changes to the NoBlur project are documented in this file.
 ## [2.0.0] - 2026-06-16
 
 ### Added
-- **TikTok Frame Density Bypass:** Non-Interpolation path now inflates the MP4 sample table 10x — a 448-frame 30fps clip is rewritten to declare 4480 virtual frames (448 real + 4032 dummy 8-byte samples whose chunk offsets point to a safe padding region at EOF). TikTok detects this as high-density/300fps-equivalent content and skips heavy recompression, preserving original visual quality.
+- **TikTok Frame Density Bypass:** Non-Interpolation path inflates the MP4 sample table — a clip is rewritten to declare more virtual frames (real samples kept + dummy 8-byte samples whose chunk offsets point to a safe padding region at EOF). TikTok detects this as high-density content and skips heavy recompression, preserving original visual quality.
+- **Selectable Density Multiplier (5x default):** The inflation multiplier is configurable. 5x is the confirmed sweetspot — it passes TikTok compression while keeping the dummy-frame tail (and the brief end-of-video freeze) short. 10x also works but produces a longer freeze.
+- **Output Resolution Selector (1080p / 2K):** Output can be scaled to 1080p or 2K (1440p) via a UI dropdown. Bitrate auto-scales with resolution — 1080p uses 14261k, 2K uses 25000k. Both confirmed to bypass TikTok compression.
 - **Modular Binary Patching Architecture:** Extracted all MP4 binary patching functions from `app.js` into four dedicated ES modules under `src/`:
   - `src/mp4-boxes.mjs` — core box parsing, size update, chunk offset helpers
   - `src/mp4-patches.mjs` — edts/elst rebuild, mvhd matrix patch
   - `src/mp4-strip.mjs` — udta strip, comment udta injection, tkhd matrix reset
   - `src/mp4-inflate.mjs` — sample table inflation (Frame Density Bypass)
 - **7-Pass Non-Interpolation Pipeline:** Expanded from 3 passes to 7 passes:
-  1. FFmpeg container reencode (libx264, CBR 14261k, aac 250k, timescale 90000)
+  1. FFmpeg container reencode (libx264, CBR, aac 250k, timescale 90000)
   2. ZeroLoss Track Bypass (edts/elst with video mediaTime offset 6000)
   3. Quantum Matrix Patch (mvhd matrix_b)
   4. Udta Strip (removes FFmpeg encoder tag)
   5. Tkhd Matrix Reset (identity matrix on all tracks)
-  6. Frame Density Inflation (10x sample table expansion)
+  6. Frame Density Inflation (sample table expansion)
   7. Comment Udta Injection (Apple iTunes-style ©cmt tag)
-- **H.264 Output Profile:** Switched Non-Interpolation encoder from libx265 CRF 18 to libx264 CBR 14261k, Main profile Level 4.2, matching the reference output profile that bypasses TikTok compression.
-- **Standard Video Timescale:** Non-Interpolation path now forces `-video_track_timescale 90000` and injects edit list `mediaTime=6000` on the video track for proper AV sync alignment.
-- **MP4 Container Dimension Parser:** Added `getDimensionsFromMp4Container` to read video width/height/rotation directly from the `tkhd` box binary. Replaces reliance on browser `<video>` element for dimension detection, fixing orientation errors on HEVC/H.265 inputs and videos with rotation metadata.
+- **Aligned Interpolation Pipeline:** The 60fps VFI path now shares the same metadata treatment — timescale 90000, AAC 250k audio, udta strip, tkhd matrix reset, and comment udta injection (frame density inflation is skipped since VFI already produces real high-fps frames).
+- **H.264 Output Profile:** Switched Non-Interpolation encoder from libx265 CRF 18 to libx264 CBR, Main profile Level 4.2, matching the reference output profile that bypasses TikTok compression.
+- **MP4 Container Dimension Parser:** Added `getDimensionsFromMp4Container` to read video width/height/rotation directly from the `tkhd` box binary, fixing orientation errors on HEVC/H.265 inputs and videos with rotation metadata.
 - **Output Thumbnail Capture:** History thumbnails are now captured from the processed output buffer instead of the original input file, fixing blank thumbnails on HEVC and rotated video inputs.
+- **Screen Wake Lock:** The screen stays awake during processing on supported mobile browsers, re-acquiring the lock when the tab regains visibility.
+- **Upload to TikTok Studio Button:** Added a direct link to TikTok Studio web upload, with a mobile-only modal guiding users to enable desktop mode first.
 
 ### Changed
-- **Non-Interpolation Output Format:** Replaced libx265 CRE encoding with libx264 CBR pipeline. Output is now H.264 Main@L4.2 with standard timescale, matching professionally encoded reference files.
-- **Rotation Handling:** Removed `-noautorotate` FFmpeg flag. FFmpeg now bakes rotation metadata into pixel data during encode, producing correctly oriented output without Display Matrix side data artifacts.
+- **Non-Interpolation Output Format:** Replaced libx265 CRF encoding with libx264 CBR pipeline. Output is now H.264 Main@L4.2 with standard timescale, matching professionally encoded reference files.
+- **Rotation Handling:** Removed `-noautorotate` FFmpeg flag. FFmpeg now bakes rotation metadata into pixel data during encode, producing correctly oriented output.
 - **stsc Patch for Multi-FPS Inputs:** `inflateSampleTableVideo` now also patches the `stsc` (Sample-to-Chunk) table by appending a terminal entry `{first_chunk: origCount+1, spc: 1}` to prevent sample count mismatches on 60fps and variable-fps inputs.
+- **UI Copy & Layout:** Updated header subtitle and system stats to reflect the re-encode + frame density engine; fixed tablet (901-1100px) three-column layout and `stat-value-small` text overflow on mobile.
 
 ### Fixed
 - **Audio Corruption After Inflation:** Fixed critical bug where audio chunk offsets were not shifted after moov expansion during sample table inflation, causing audio decode failures on all inflated files.
 - **Portrait/Landscape Detection for HEVC:** Browser `<video>` cannot decode HEVC on most platforms, causing it to report 0×0 or wrong dimensions. Container-level dimension parsing now correctly identifies orientation for HEVC inputs.
 
-
+## [1.4.0] - 2026-06-16
 
 ### Added
 - **Adaptive Rotation Scaling:** Interpolation OFF path now detects video orientation and applies adaptive scaling — landscape videos scale to height 1080px, portrait videos scale to width 1080px, preserving aspect ratio without black padding bars.

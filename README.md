@@ -1,8 +1,8 @@
 # NoBlur — Post TikTok Videos Without the Blur
 
-NoBlur is a premium, client-side web application that processes MP4 and MOV video containers locally directly in your browser to bypass aggressive server-side recompression when uploading to TikTok. It offers two pipelines: a metadata-only patch path and a full re-encode path with MP4 sample-table frame density inflation. The result preserves original quality, visual fidelity, and audio-video synchronization.
+NoBlur is a premium, client-side web application that processes MP4 and MOV video containers locally directly in your browser to bypass aggressive server-side recompression when uploading to TikTok. It offers two pipelines: a full re-encode path with MP4 sample-table frame density inflation, and a 60fps VFI interpolation path. The result preserves original quality, visual fidelity, and audio-video synchronization.
 
-All processing is performed client-side using JavaScript, ArrayBuffers, Blobs, and FFmpeg.wasm. No data is uploaded to external servers, guaranteeing absolute privacy and security for your content.
+All processing is performed client-side using JavaScript, ArrayBuffers, Blobs, and FFmpeg.wasm. No data is uploaded to external servers.
 
 ---
 
@@ -14,30 +14,33 @@ NoBlur runs two distinct pipelines depending on the Interpolation toggle.
 
 The primary path for bypassing TikTok recompression. It re-encodes the video and rewrites the MP4 sample table to mimic a high-frame-density video.
 
-1. **Container Reencode:** FFmpeg.wasm re-encodes to H.264 Main@L4.2, CBR 14261k, AAC 250k 48kHz stereo, video timescale 90000, faststart. Output FPS follows the input. FFmpeg bakes any rotation metadata into the pixel data.
+1. **Container Reencode:** FFmpeg.wasm re-encodes to H.264 Main@L4.2, CBR (bitrate auto-scales with resolution), AAC 250k 48kHz stereo, video timescale 90000, faststart. Output FPS follows the input. FFmpeg bakes any rotation metadata into the pixel data.
 2. **ZeroLoss Track Bypass:** Rebuilds `edts`/`elst` atoms; the video track receives an edit-list `mediaTime` offset of 6000 ticks for AV sync alignment.
 3. **Quantum Matrix Patch:** Patches the `mvhd` display matrix in-place.
 4. **Udta Strip:** Removes the FFmpeg encoder signature from the `udta` atom.
 5. **Tkhd Matrix Reset:** Resets all track header matrices to identity.
-6. **Frame Density Inflation:** Inflates the sample table 10x. The real frames are kept; dummy 8-byte samples are appended (with `stts`/`stsz`/`stco`/`stsc` patched and padding written at EOF). TikTok reads the inflated frame count as high-density content and skips heavy recompression. Players freeze-frame on the dummy tail so playback completes normally.
+6. **Frame Density Inflation:** Inflates the sample table by a configurable multiplier (default 5x — confirmed sweetspot). Real frames are kept; dummy 8-byte samples are appended with `stts`/`stsz`/`stco`/`stsc` patched and padding written at EOF. TikTok reads the inflated frame count as high-density content and skips heavy recompression.
 7. **Comment Udta Injection:** Writes an Apple iTunes-style `©cmt` comment tag.
 
 ### Interpolation Path (60fps VFI)
 
-When the Interpolation toggle is enabled, the engine runs motion-compensated frame interpolation (`minterpolate`) to 60fps, followed by ZeroLoss Track Bypass and Quantum Matrix patches.
+When the Interpolation toggle is enabled, the engine runs motion-compensated frame interpolation (`minterpolate`) to 60fps. The same metadata pipeline (passes 2-5, 7) is applied: udta strip, tkhd reset, comment udta injection, timescale 90000, and AAC 250k audio. Frame density inflation (pass 6) is skipped since VFI already produces real high-fps frames.
 
 ---
 
 ## Key Features
 
-- **TikTok Compression Bypass:** Frame density inflation makes videos pass TikTok's quality-preservation threshold, avoiding the blur from server-side recompression.
+- **TikTok Compression Bypass:** Frame density inflation (5x default, confirmed) makes videos pass TikTok's quality-preservation threshold, avoiding the blur from server-side recompression. Works for both 1080p and 2K output.
+- **Selectable Output Resolution:** Choose between 1080p and 2K (1440p). Bitrate auto-scales — 1080p at 14261k, 2K at 25000k.
 - **Client-Side Only:** 100% of processing happens locally within your browser using FFmpeg.wasm, ensuring total data privacy.
-- **Adaptive Orientation:** Detects portrait/landscape directly from the MP4 container (`tkhd` box), correctly handling HEVC inputs and videos with rotation metadata. Landscape scales to 1080px height, portrait to 1080px width.
+- **Adaptive Orientation:** Detects portrait/landscape directly from the MP4 container (`tkhd` box), correctly handling HEVC inputs and videos with rotation metadata.
 - **Multi-Format & Codec Input:** Accepts MP4 and MOV containers with H.264, HEVC/H.265, and other codecs; output is normalized to H.264.
 - **Bulk Processing Queue:** Drag and drop or select multiple videos to process in a sequential batch.
+- **Screen Wake Lock:** Keeps the screen awake on mobile during processing; re-acquires the lock if the tab loses and regains visibility.
+- **TikTok Studio Shortcut:** Direct upload button to TikTok Studio web; on mobile, a modal guides the user to enable desktop mode first.
 - **Fast-Start Container Fix:** Recalculates chunk offsets (`stco`/`co64`) on every structural shift to keep output playable.
 - **High-Contrast Dark Neo-Brutalist UI:** Flat offset shadows, solid dark panels, tactile click feedback, neon accents.
-- **Responsive Mobile Layout:** Relocates the upload drop zone dynamically on mobile viewports.
+- **Responsive Mobile Layout:** Relocates the upload drop zone dynamically on mobile viewports; stat text wraps correctly on narrow screens.
 - **Local History & Storage Guard:** IndexedDB history with output-buffer thumbnails, 12-hour pruning, and a 200MB limit.
 
 ---
@@ -72,4 +75,4 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full release history.
 
 ## Disclaimer
 
-This utility re-encodes video and rewrites MP4 container atoms to match optimized format profiles. It is designed to work with valid MP4 and MOV containers. While every effort is made to safeguard file structures, always keep backups of your original video files before processing.
+This utility re-encodes video and rewrites MP4 container atoms to match optimized format profiles. It is designed to work with valid MP4 and MOV containers. Always keep backups of your original video files before processing.

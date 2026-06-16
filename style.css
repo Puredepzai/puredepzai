@@ -148,6 +148,18 @@ body {
     max-width: 200px;
 }
 
+.stat-select {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    background: var(--color-primary);
+    color: #000000;
+    border: var(--border-thick);
+    border-radius: 3px;
+    padding: 2px 6px;
+    cursor: pointer;
+}
+
 .text-accent {
     color: var(--color-accent) !important;
 }

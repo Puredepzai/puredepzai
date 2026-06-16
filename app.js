@@ -757,7 +757,7 @@ async function execWithEncoder(instance, args, encoder) {
     }
 }
 
-async function runVFI(file, width, height) {
+async function runVFI(file, width, height, targetRes = 1080) {
     let instance;
     try {
         if (isCancelled) throw new Error("Cancelled");
@@ -795,9 +795,9 @@ async function runVFI(file, width, height) {
         let filter =
             "mpdecimate,minterpolate=fps=60:mi_mode=mci:me_mode=bilat:me=epzs:search_param=4";
         if (width > height) {
-            filter = `scale=-2:1080,${filter}`;
+            filter = `scale=-2:${targetRes},${filter}`;
         } else {
-            filter = `scale=1080:-2,${filter}`;
+            filter = `scale=${targetRes}:-2,${filter}`;
         }
 
         logMessage(
@@ -876,10 +876,13 @@ async function patchSingleFile(item) {
             );
         }
 
+        const vfiResEl = document.getElementById("outputResolution");
+        const vfiTargetRes = vfiResEl ? parseInt(vfiResEl.value, 10) : 1080;
         const workingBuffer = await runVFI(
             item.file,
             videoInfo.width,
             videoInfo.height,
+            vfiTargetRes,
         );
         const workingBytes = new Uint8Array(workingBuffer);
         const workingView = new DataView(workingBuffer);
@@ -952,11 +955,20 @@ async function patchSingleFile(item) {
         throw new Error("Could not parse video metadata.");
     }
 
+    const resolutionEl = document.getElementById("outputResolution");
+    const targetRes = resolutionEl ? parseInt(resolutionEl.value, 10) : 1080;
+    const resolutionBitrate = { 1080: "14261k", 1440: "25000k" };
+    const resolutionMaxrate = { 1080: "15000k", 1440: "27000k" };
+    const resolutionBufsize = { 1080: "28000k", 1440: "50000k" };
+    const targetBitrate = resolutionBitrate[targetRes] || "14261k";
+    const targetMaxrate = resolutionMaxrate[targetRes] || "15000k";
+    const targetBufsize = resolutionBufsize[targetRes] || "28000k";
+
     const isLandscape = videoInfo.width > videoInfo.height;
-    const scaleFilter = isLandscape ? "scale=-2:1080" : "scale=1080:-2";
+    const scaleFilter = isLandscape ? `scale=-2:${targetRes}` : `scale=${targetRes}:-2`;
 
     logMessage(
-        `  Source: ${videoInfo.width}x${videoInfo.height} (${isLandscape ? "landscape" : "portrait"}) → ${isLandscape ? "H:1080" : "W:1080"} adaptive`,
+        `  Source: ${videoInfo.width}x${videoInfo.height} (${isLandscape ? "landscape" : "portrait"}) → ${isLandscape ? `H:${targetRes}` : `W:${targetRes}`} adaptive`,
         "info",
     );
 
@@ -993,11 +1005,11 @@ async function patchSingleFile(item) {
         "-pix_fmt",
         "yuv420p",
         "-b:v",
-        "14261k",
+        targetBitrate,
         "-maxrate",
-        "15000k",
+        targetMaxrate,
         "-bufsize",
-        "28000k",
+        targetBufsize,
         "-g",
         "30",
         "-bf",
@@ -1107,7 +1119,7 @@ async function patchSingleFile(item) {
         logMessage("  [Pass 5/7] Tkhd Matrix Zero skipped.", "warning");
     }
 
-    const inflateResult = inflateSampleTableVideo(finalBytes, finalView);
+    const inflateResult = inflateSampleTableVideo(finalBytes, finalView, 5);
     if (inflateResult) {
         finalBuffer = inflateResult.newBuffer;
         finalBytes = inflateResult.newBytes;

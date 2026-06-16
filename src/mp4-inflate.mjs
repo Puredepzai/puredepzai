@@ -1,6 +1,5 @@
 import { parseBoxes, getBoxHeaderSize, updateBoxSize, updateChunkOffsets } from "./mp4-boxes.mjs";
 
-const FRAME_INFLATION_MULTIPLIER = 10;
 const DUMMY_SAMPLE_SIZE = 8;
 
 function findVideoStbl(bytes, view, moovBox) {
@@ -35,8 +34,8 @@ function findVideoStbl(bytes, view, moovBox) {
     return null;
 }
 
-function buildSttsAtom(realCount, sampleDelta) {
-    const fakeCount = realCount * (FRAME_INFLATION_MULTIPLIER - 1);
+function buildSttsAtom(realCount, sampleDelta, multiplier) {
+    const fakeCount = realCount * (multiplier - 1);
     const atomSize = 16 + 2 * 8;
     const buffer = new ArrayBuffer(atomSize);
     const b = new Uint8Array(buffer);
@@ -54,8 +53,8 @@ function buildSttsAtom(realCount, sampleDelta) {
     return b;
 }
 
-function buildStszAtom(inputBytes, inputView, stszBox, realCount) {
-    const totalCount = realCount * FRAME_INFLATION_MULTIPLIER;
+function buildStszAtom(inputBytes, inputView, stszBox, realCount, multiplier) {
+    const totalCount = realCount * multiplier;
     const atomSize = 20 + totalCount * 4;
     const buffer = new ArrayBuffer(atomSize);
     const b = new Uint8Array(buffer);
@@ -78,9 +77,9 @@ function buildStszAtom(inputBytes, inputView, stszBox, realCount) {
     return b;
 }
 
-function buildStcoAtom(inputView, stcoBox, realCount, safeOffset, offsetDelta) {
+function buildStcoAtom(inputView, stcoBox, realCount, safeOffset, offsetDelta, multiplier) {
     const origCount = inputView.getUint32(stcoBox.offset + 12, false);
-    const fakeCount = realCount * (FRAME_INFLATION_MULTIPLIER - 1);
+    const fakeCount = realCount * (multiplier - 1);
     const newCount = origCount + fakeCount;
     const atomSize = 16 + newCount * 4;
     const buffer = new ArrayBuffer(atomSize);
@@ -133,11 +132,12 @@ function buildStscPatch(inputBytes, inputView, stscBox, origStcoCount) {
     return b;
 }
 
-export function inflateSampleTableVideo(inputBytes, inputView) {
+export function inflateSampleTableVideo(inputBytes, inputView, multiplier = 5) {
     const fileSize = inputBytes.length;
     const topBoxes = parseBoxes(inputBytes, inputView, 0, fileSize);
     const moovBox = topBoxes.find((b) => b.type === "moov");
     if (!moovBox) return null;
+    if (multiplier < 2) return null;
 
     const located = findVideoStbl(inputBytes, inputView, moovBox);
     if (!located) return null;
@@ -160,19 +160,19 @@ export function inflateSampleTableVideo(inputBytes, inputView) {
 
     const origStcoCount = inputView.getUint32(stcoBox.offset + 12, false);
 
-    const newStts = buildSttsAtom(realCount, sampleDelta);
-    const newStsz = buildStszAtom(inputBytes, inputView, stszBox, realCount);
+    const newStts = buildSttsAtom(realCount, sampleDelta, multiplier);
+    const newStsz = buildStszAtom(inputBytes, inputView, stszBox, realCount, multiplier);
     const newStsc = buildStscPatch(inputBytes, inputView, stscBox, origStcoCount);
 
     const sttsDelta = newStts.length - sttsBox.size;
     const stszDelta = newStsz.length - stszBox.size;
     const stscDelta = newStsc.length - stscBox.size;
-    const fakeCount = realCount * (FRAME_INFLATION_MULTIPLIER - 1);
+    const fakeCount = realCount * (multiplier - 1);
     const stcoDelta = fakeCount * 4;
     const moovDelta = sttsDelta + stszDelta + stscDelta + stcoDelta;
 
     const safeOffset = fileSize + moovDelta;
-    const newStco = buildStcoAtom(inputView, stcoBox, realCount, safeOffset, moovDelta);
+    const newStco = buildStcoAtom(inputView, stcoBox, realCount, safeOffset, moovDelta, multiplier);
 
     const replacements = [
         { box: sttsBox, bytes: newStts },
