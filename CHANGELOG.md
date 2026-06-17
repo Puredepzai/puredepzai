@@ -2,6 +2,31 @@
 
 All notable changes to the NoBlur project are documented in this file.
 
+## [2.1.0] - 2026-06-17
+
+### Added
+- **Hybrid Interpolation Pipeline:** When interpolation is enabled, the VFI engine runs first to produce a 60fps video, then the output is fed into the full 7-pass non-interpolation pipeline (CBR re-encode + binary patches). This ensures VFI output gets the same TikTok bypass treatment as the standard path.
+- **FFmpeg Instance Reset:** After VFI completes, the FFmpeg instance is destroyed and recreated for the re-encode pipeline to prevent stale WASM state errors.
+
+### Changed
+- **Interpolation Resolution:** VFI now uses the output resolution selector (1080p / 2K) directly, eliminating the need for metadata extraction.
+- **Container Dimension Parser:** Interpolation path now uses `getDimensionsFromMp4Container()` to read width/height from the MP4 container instead of `getVideoDurationAndResolution()`, reducing overhead.
+- **Removed Duration Guard:** The 30-second video duration limit has been removed. Videos of any length are now processed.
+- **Simplified VFI Encoding:** Removed codec detection logic. VFI now hardcodes libx264 encoder, matching the 7-pass pipeline.
+
+### Removed
+- **Dead Code Cleanup:** Removed unused functions `CODEC_ENCODER_MAP`, `probeSourceFps()`, `probeInputCodec()`, and `execWithEncoder()`.
+
+### Fixed
+- **Stale FFmpeg Instance:** Fixed intermittent errors when running re-encode after VFI by resetting the FFmpeg instance between stages.
+- **Modal Scroll Lock:** All modals (TikTok, VFI) now properly lock background scroll on mobile and desktop.
+- **TikTok Modal Button Alignment:** Fixed "Open TikTok Studio" button text centering on mobile.
+- **Changelog Scroll Isolation:** Added `overscroll-behavior: contain` to prevent scroll-through in the changelog panel.
+
+### UI/UX
+- **Custom Scrollbar:** Global scrollbar styled to 2px width with theme-colored thumb.
+- **Changelog Panel Position:** Moved to bottom-right corner with slide-in animation from right to left.
+
 ## [2.0.0] - 2026-06-16
 
 ### Added

@@ -22,9 +22,9 @@ The primary path for bypassing TikTok recompression. It re-encodes the video and
 6. **Frame Density Inflation:** Inflates the sample table by a configurable multiplier (default 5x — confirmed sweetspot). Real frames are kept; dummy 8-byte samples are appended with `stts`/`stsz`/`stco`/`stsc` patched and padding written at EOF. TikTok reads the inflated frame count as high-density content and skips heavy recompression.
 7. **Comment Udta Injection:** Writes an Apple iTunes-style `©cmt` comment tag.
 
-### Interpolation Path (60fps VFI)
+### Interpolation Path (60fps VFI + Full Pipeline)
 
-When the Interpolation toggle is enabled, the engine runs motion-compensated frame interpolation (`minterpolate`) to 60fps. The same metadata pipeline (passes 2-5, 7) is applied: udta strip, tkhd reset, comment udta injection, timescale 90000, and AAC 250k audio. Frame density inflation (pass 6) is skipped since VFI already produces real high-fps frames.
+When the Interpolation toggle is enabled, the engine runs motion-compensated frame interpolation (`minterpolate`) to 60fps using the output resolution setting (1080p or 2K). The interpolated video is then passed through the complete 7-pass non-interpolation pipeline to ensure TikTok bypass compatibility. After VFI completes, the FFmpeg instance is reset to prevent stale state errors, then the video undergoes full re-encoding and binary patching.
 
 ---
 

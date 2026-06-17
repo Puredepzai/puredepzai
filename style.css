@@ -44,6 +44,25 @@ body {
     background-image: radial-gradient(#000000 15%, transparent 15%);
     background-size: 16px 16px;
     overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-primary) var(--bg-dark);
+}
+
+::-webkit-scrollbar {
+    width: 2px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-primary);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #ff6f3f;
 }
 
 .container {
@@ -354,7 +373,7 @@ body {
 }
 
 .status-log::-webkit-scrollbar {
-    width: 4px;
+    width: 2px;
 }
 
 .status-log::-webkit-scrollbar-track {
@@ -513,7 +532,7 @@ body {
 }
 
 .file-list::-webkit-scrollbar {
-    width: 4px;
+    width: 2px;
 }
 
 .file-list::-webkit-scrollbar-track {
@@ -893,7 +912,7 @@ body {
 }
 
 .history-list::-webkit-scrollbar {
-    width: 4px;
+    width: 2px;
 }
 
 .history-list::-webkit-scrollbar-track {
@@ -1181,6 +1200,8 @@ body {
 .modal-overlay.active {
     opacity: 1;
     pointer-events: all;
+    touch-action: none;
+    overscroll-behavior: none;
 }
 
 .modal-card {
@@ -1337,6 +1358,8 @@ body {
 .modal-btn-confirm {
     background: var(--color-primary);
     color: #000000;
+    text-align: center;
+    text-decoration: none;
 }
 
 @media (max-width: 1100px) and (min-width: 901px) {
@@ -1455,8 +1478,10 @@ body {
 }
 
 #changelogContainer {
-    display: inline-block;
-    margin-left: 8px;
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
 }
 
 .changelog-badge {
@@ -1497,8 +1522,7 @@ body {
 .changelog-panel {
     position: fixed;
     bottom: 60px;
-    left: 50%;
-    transform: translateX(-50%);
+    right: 20px;
     width: min(600px, 92vw);
     background: var(--bg-panel);
     border: var(--border-thick);
@@ -1507,7 +1531,14 @@ body {
     z-index: 9998;
     max-height: 400px;
     overflow: hidden;
-    transition: max-height 0.3s ease-out;
+    transition: max-height 0.3s ease-out, transform 0.3s ease-out, opacity 0.3s ease-out;
+    transform: translateX(100%);
+    opacity: 0;
+}
+
+.changelog-panel:not(.changelog-panel-hidden) {
+    transform: translateX(0);
+    opacity: 1;
 }
 
 .changelog-panel-hidden {
@@ -1555,6 +1586,26 @@ body {
     padding: 16px;
     overflow-y: auto;
     max-height: calc(400px - 50px);
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-primary) var(--bg-dark);
+}
+
+.changelog-content::-webkit-scrollbar {
+    width: 1px;
+}
+
+.changelog-content::-webkit-scrollbar-track {
+    background: var(--bg-dark);
+}
+
+.changelog-content::-webkit-scrollbar-thumb {
+    background: var(--color-primary);
+    border-radius: 4px;
+}
+
+.changelog-content::-webkit-scrollbar-thumb:hover {
+    background: #ff6f3f;
 }
 
 .changelog-version {

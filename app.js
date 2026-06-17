@@ -731,84 +731,11 @@ async function getFFmpeg() {
     return ffmpegInstance;
 }
 
-const CODEC_ENCODER_MAP = {
-    h264: "libx264",
-    avc: "libx264",
-    hevc: "libx265",
-    h265: "libx265",
-    vp9: "libvpx-vp9",
-    vp8: "libvpx",
-    mpeg4: "mpeg4",
-    av1: "libaom-av1",
-};
-
 function resolveInputExtension(file) {
     const lower = file.name.toLowerCase();
     if (lower.endsWith(".mov")) return ".mov";
     if (lower.endsWith(".webm")) return ".webm";
     return ".mp4";
-}
-
-async function probeSourceFps(instance, inputName) {
-    const logLines = [];
-    const collector = ({ message }) => logLines.push(message);
-    instance.on("log", collector);
-    try {
-        await instance.exec(["-i", inputName]);
-    } catch (err) {
-        console.error("Failed to probe source FPS:", err);
-    }
-    instance.off("log", collector);
-
-    for (const line of logLines) {
-        const match = line.match(/(\d+(?:\.\d+)?)\s+fps/i);
-        if (match) {
-            const fps = Number.parseFloat(match[1]);
-            if (fps > 0) return fps;
-        }
-    }
-    return null;
-}
-
-async function probeInputCodec(instance, inputName) {
-    const logLines = [];
-    const collector = ({ message }) => logLines.push(message.toLowerCase());
-    instance.on("log", collector);
-    try {
-        await instance.exec(["-i", inputName]);
-    } catch (err) {
-        console.error("Failed to probe input codec:", err);
-    }
-    instance.off("log", collector);
-
-    for (const line of logLines) {
-        const streamMatch = line.match(/\bvideo:\s*([a-z0-9]+)/);
-        if (streamMatch) {
-            const codec = streamMatch[1];
-            if (CODEC_ENCODER_MAP[codec]) return codec;
-        }
-    }
-    return null;
-}
-
-async function execWithEncoder(instance, args, encoder) {
-    const logLines = [];
-    const collector = ({ message }) => logLines.push(message.toLowerCase());
-    instance.on("log", collector);
-    try {
-        await instance.exec(args);
-        instance.off("log", collector);
-        return true;
-    } catch (err) {
-        instance.off("log", collector);
-        const failed = logLines.some(
-            (l) =>
-                l.includes("unknown encoder") ||
-                l.includes(`encoder ${encoder} is not available`),
-        );
-        if (failed) return false;
-        throw err;
-    }
 }
 
 async function runVFI(file, width, height, targetRes = 1080) {
@@ -824,16 +751,6 @@ async function runVFI(file, width, height, targetRes = 1080) {
         logMessage("Preparing video data streams...", "info");
         await instance.writeFile(inputName, await fetchFile(file));
         if (isCancelled) throw new Error("Cancelled");
-
-        logMessage("Detecting input video codec...", "info");
-        const detectedCodec = await probeInputCodec(instance, inputName);
-        const targetEncoder = detectedCodec
-            ? (CODEC_ENCODER_MAP[detectedCodec] ?? "libx264")
-            : "libx264";
-        logMessage(
-            `Input codec: ${detectedCodec ?? "unknown"} -> encoder: ${targetEncoder}`,
-            "info",
-        );
 
         const isMultiThread =
             typeof window.SharedArrayBuffer !== "undefined" &&
@@ -859,13 +776,13 @@ async function runVFI(file, width, height, targetRes = 1080) {
             "info",
         );
 
-        const buildArgs = (encoder) => [
+        const args = [
             "-i",
             inputName,
             "-vf",
             filter,
             "-c:v",
-            encoder,
+            "libx264",
             "-preset",
             "ultrafast",
             "-crf",
@@ -885,19 +802,7 @@ async function runVFI(file, width, height, targetRes = 1080) {
             outputName,
         ];
 
-        const succeeded = await execWithEncoder(
-            instance,
-            buildArgs(targetEncoder),
-            targetEncoder,
-        );
-
-        if (!succeeded) {
-            logMessage(
-                `Encoder ${targetEncoder} not available in this build. Falling back to libx264.`,
-                "warning",
-            );
-            await instance.exec(buildArgs("libx264"));
-        }
+        await instance.exec(args);
 
         logMessage("Completed frame processing.", "success");
         const data = await instance.readFile(outputName);
@@ -914,117 +819,46 @@ async function runVFI(file, width, height, targetRes = 1080) {
 
 async function patchSingleFile(item) {
     const enableInterpolation = document.getElementById("enableInterpolation");
+    const resolutionEl = document.getElementById("outputResolution");
+    const targetRes = resolutionEl ? Number.parseInt(resolutionEl.value, 10) : 1080;
+
+    let sourceBuffer = null;
 
     if (enableInterpolation?.checked) {
-        logMessage("Starting VFI Engine for frame rate upgrade...", "info");
+        logMessage("Starting VFI Engine for 60fps interpolation...", "info");
         if (isCancelled) throw new Error("Cancelled");
-        const videoInfo = await getVideoDurationAndResolution(item.file);
+
+        const fileBytes = new Uint8Array(await item.file.arrayBuffer());
+        const fileView = new DataView(fileBytes.buffer);
+        const dims = getDimensionsFromMp4Container(fileBytes, fileView);
+        if (!dims) {
+            throw new Error("Could not parse video dimensions from container.");
+        }
+
+        const workingBuffer = await runVFI(
+            item.file,
+            dims.width,
+            dims.height,
+            targetRes,
+        );
+        sourceBuffer = workingBuffer;
+        logMessage("VFI interpolation complete. Proceeding to re-encode pipeline...", "success");
+
+        await destroyFFmpegInstance();
+        logMessage("FFmpeg instance reset for re-encode pipeline...", "info");
+    }
+
+    if (isCancelled) throw new Error("Cancelled");
+
+    let videoInfo = null;
+    if (!sourceBuffer) {
+        videoInfo = await getVideoDurationAndResolution(item.file);
         if (isCancelled) throw new Error("Cancelled");
         if (!videoInfo) {
             throw new Error("Could not parse video metadata.");
         }
-
-        if (videoInfo.duration > MAX_VIDEO_DURATION_SECONDS) {
-            throw new Error(
-                `Video duration of ${Math.round(videoInfo.duration)}s exceeds the strict 30s limit.`,
-            );
-        }
-
-        const vfiResEl = document.getElementById("outputResolution");
-        const vfiTargetRes = vfiResEl
-            ? Number.parseInt(vfiResEl.value, 10)
-            : 1080;
-        const workingBuffer = await runVFI(
-            item.file,
-            videoInfo.width,
-            videoInfo.height,
-            vfiTargetRes,
-        );
-        const workingBytes = new Uint8Array(workingBuffer);
-        const workingView = new DataView(workingBuffer);
-
-        const mimeType = getMimeType(item.file);
-        const outputName = getOutputFilename(item.file);
-
-        let finalBuffer = workingBuffer;
-        let finalBytes = workingBytes;
-        let finalView = workingView;
-
-        const elstResult = rebuildWithElstBypass(workingBytes, workingView);
-        if (elstResult) {
-            finalBuffer = elstResult.newBuffer;
-            finalBytes = elstResult.newBytes;
-            finalView = new DataView(finalBuffer);
-            logMessage(
-                `  [Pass 1/5] ZeroLoss Track Bypass: Applied.`,
-                "success",
-            );
-        } else {
-            logMessage(
-                "  [Pass 1/5] ZeroLoss Track Bypass skipped.",
-                "warning",
-            );
-        }
-
-        const quantumResult = patchMvhdMatrix(finalBytes, finalView);
-        if (quantumResult && !quantumResult.skipped) {
-            logMessage(`  [Pass 2/5] Quantum Matrix: Patched.`, "success");
-        } else {
-            logMessage("  [Pass 2/5] Quantum Matrix skipped.", "warning");
-        }
-
-        const udtaResult = stripUdtaAtom(finalBytes, finalView);
-        if (udtaResult) {
-            finalBuffer = udtaResult.newBuffer;
-            finalBytes = udtaResult.newBytes;
-            finalView = new DataView(finalBuffer);
-            logMessage("  [Pass 3/5] Udta Strip: Applied.", "success");
-        } else {
-            logMessage("  [Pass 3/5] Udta Strip skipped.", "warning");
-        }
-
-        const tkhdResult = stripTkhdMatrix(finalBytes, finalView);
-        if (tkhdResult.patched) {
-            logMessage("  [Pass 4/5] Tkhd Matrix Zero: Applied.", "success");
-        } else {
-            logMessage("  [Pass 4/5] Tkhd Matrix Zero skipped.", "warning");
-        }
-
-        const commentResult = injectCommentUdta(
-            finalBytes,
-            finalView,
-            "KwjYwI2DziQ8It5PyJGJgQ",
-        );
-        if (commentResult) {
-            finalBuffer = commentResult.newBuffer;
-            finalBytes = commentResult.newBytes;
-            finalView = new DataView(finalBuffer);
-            logMessage(
-                "  [Pass 5/5] Comment Udta Injection: Applied.",
-                "success",
-            );
-        } else {
-            logMessage(
-                "  [Pass 5/5] Comment Udta Injection skipped.",
-                "warning",
-            );
-        }
-
-        return { finalBuffer, outputName, mimeType };
     }
 
-    if (isCancelled) throw new Error("Cancelled");
-
-    const videoInfo = await getVideoDurationAndResolution(item.file);
-    if (isCancelled) throw new Error("Cancelled");
-    if (!videoInfo) {
-        throw new Error("Could not parse video metadata.");
-    }
-
-    const resolutionEl = document.getElementById("outputResolution");
-    const targetRes = resolutionEl
-        ? Number.parseInt(resolutionEl.value, 10)
-        : 1080;
     const resolutionBitrate = { 1080: "14261k", 1440: "25000k" };
     const resolutionMaxrate = { 1080: "15000k", 1440: "27000k" };
     const resolutionBufsize = { 1080: "28000k", 1440: "50000k" };
@@ -1032,40 +866,57 @@ async function patchSingleFile(item) {
     const targetMaxrate = resolutionMaxrate[targetRes] || "15000k";
     const targetBufsize = resolutionBufsize[targetRes] || "28000k";
 
-    const isLandscape = videoInfo.width > videoInfo.height;
-    const scaleFilter = isLandscape
-        ? `scale=-2:${targetRes}`
-        : `scale=${targetRes}:-2`;
-
-    logMessage(
-        `  Source: ${videoInfo.width}x${videoInfo.height} (${isLandscape ? "landscape" : "portrait"}) → ${isLandscape ? `H:${targetRes}` : `W:${targetRes}`} adaptive`,
-        "info",
-    );
-
     const mimeType = getMimeType(item.file);
     const outputName = getOutputFilename(item.file);
 
-    logMessage("  [Pass 1/5] Running container reencode...", "info");
+    let scaleFilter = null;
+    let inputExt = ".mp4";
+
+    if (videoInfo) {
+        const isLandscape = videoInfo.width > videoInfo.height;
+        scaleFilter = isLandscape
+            ? `scale=-2:${targetRes}`
+            : `scale=${targetRes}:-2`;
+
+        logMessage(
+            `  Source: ${videoInfo.width}x${videoInfo.height} (${isLandscape ? "landscape" : "portrait"}) → ${isLandscape ? `H:${targetRes}` : `W:${targetRes}`} adaptive`,
+            "info",
+        );
+        inputExt = resolveInputExtension(item.file);
+    } else {
+        logMessage(
+            `  Source: VFI 60fps output → re-encode at ${targetRes}p`,
+            "info",
+        );
+    }
+
+    logMessage("  [Pass 1/7] Running container reencode...", "info");
 
     const instance = await getFFmpeg();
     if (isCancelled) throw new Error("Cancelled");
 
-    const ext = resolveInputExtension(item.file);
-    const inputName = `input${ext}`;
-    const tempFileName = `temp${ext}`;
-    const outputFileName = `output${ext}`;
+    const inputName = `input${inputExt}`;
+    const tempFileName = `temp${inputExt}`;
+    const outputFileName = `output${inputExt}`;
 
-    await instance.writeFile(inputName, await fetchFile(item.file));
+    if (sourceBuffer) {
+        await instance.writeFile(inputName, new Uint8Array(sourceBuffer));
+    } else {
+        await instance.writeFile(inputName, await fetchFile(item.file));
+    }
     if (isCancelled) {
         await instance.deleteFile(inputName).catch(() => {});
         throw new Error("Cancelled");
     }
 
-    await instance.exec([
+    const reencodeArgs = [
         "-i",
         inputName,
-        "-vf",
-        scaleFilter,
+    ];
+    if (scaleFilter) {
+        reencodeArgs.push("-vf", scaleFilter);
+    }
+    reencodeArgs.push(
         "-c:v",
         "libx264",
         "-profile:v",
@@ -1101,7 +952,28 @@ async function patchSingleFile(item) {
         "-movflags",
         "+faststart",
         tempFileName,
-    ]);
+    );
+
+    if (isCancelled) {
+        await instance.deleteFile(inputName).catch(() => {});
+        await instance.deleteFile(tempFileName).catch(() => {});
+        throw new Error("Cancelled");
+    }
+
+    const logLines = [];
+    const collector = ({ message }) => logLines.push(message);
+    instance.on("log", collector);
+    try {
+        await instance.exec(reencodeArgs);
+    } catch (err) {
+        instance.off("log", collector);
+        if (!isCancelled) {
+            console.error("FFmpeg reencode error:", err);
+            console.error("FFmpeg logs:", logLines.slice(-20));
+        }
+        throw err;
+    }
+    instance.off("log", collector);
 
     if (isCancelled) {
         await instance.deleteFile(inputName).catch(() => {});
@@ -1534,6 +1406,24 @@ clearHistoryBtn.addEventListener("click", async () => {
     await renderHistoryList();
 });
 
+let scrollPosition = 0;
+
+function lockScroll() {
+    scrollPosition = window.pageYOffset;
+    document.body.style.overflow = "hidden";
+    document.body.style.top = `-${scrollPosition}px`;
+    document.body.style.position = "fixed";
+    document.body.style.width = "100%";
+}
+
+function unlockScroll() {
+    document.body.style.overflow = "";
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.width = "";
+    window.scrollTo(0, scrollPosition);
+}
+
 const enableInterpolation = document.getElementById("enableInterpolation");
 const vfiModal = document.getElementById("vfiModal");
 const closeVfiModalBtn = document.getElementById("closeVfiModalBtn");
@@ -1544,10 +1434,14 @@ if (enableInterpolation && vfiModal) {
     enableInterpolation.addEventListener("change", () => {
         if (enableInterpolation.checked) {
             vfiModal.classList.add("active");
+            lockScroll();
         }
     });
 
-    const closeModal = () => vfiModal.classList.remove("active");
+    const closeModal = () => {
+        vfiModal.classList.remove("active");
+        unlockScroll();
+    };
 
     const cancelModal = () => {
         enableInterpolation.checked = false;
@@ -1581,10 +1475,14 @@ if (tiktokStudioBtn && tiktokModal) {
         if (isMobileDevice()) {
             e.preventDefault();
             tiktokModal.classList.add("active");
+            lockScroll();
         }
     });
 
-    const closeTiktokModal = () => tiktokModal.classList.remove("active");
+    const closeTiktokModal = () => {
+        tiktokModal.classList.remove("active");
+        unlockScroll();
+    };
 
     closeTiktokModalBtn?.addEventListener("click", closeTiktokModal);
     cancelTiktokModalBtn?.addEventListener("click", closeTiktokModal);

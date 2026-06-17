@@ -1,5 +1,24 @@
 export const changelogData = [
   {
+    "version": "2.1.0",
+    "date": "2026-06-17",
+    "changes": [
+      "When interpolation is enabled, the VFI engine runs first to produce a 60fps video, then the output is fed into the full 7-pass non-interpolation pipeline (CBR re-encode + binary patches). This ensures VFI output gets the same TikTok bypass treatment as the standard path.",
+      "After VFI completes, the FFmpeg instance is destroyed and recreated for the re-encode pipeline to prevent stale WASM state errors.",
+      "VFI now uses the output resolution selector (1080p / 2K) directly, eliminating the need for metadata extraction.",
+      "Interpolation path now uses `getDimensionsFromMp4Container()` to read width/height from the MP4 container instead of `getVideoDurationAndResolution()`, reducing overhead.",
+      "The 30-second video duration limit has been removed. Videos of any length are now processed.",
+      "Removed codec detection logic. VFI now hardcodes libx264 encoder, matching the 7-pass pipeline.",
+      "Removed unused functions `CODEC_ENCODER_MAP`, `probeSourceFps()`, `probeInputCodec()`, and `execWithEncoder()`.",
+      "Fixed intermittent errors when running re-encode after VFI by resetting the FFmpeg instance between stages.",
+      "All modals (TikTok, VFI) now properly lock background scroll on mobile and desktop.",
+      "Fixed \"Open TikTok Studio\" button text centering on mobile.",
+      "Added `overscroll-behavior: contain` to prevent scroll-through in the changelog panel.",
+      "Global scrollbar styled to 2px width with theme-colored thumb.",
+      "Moved to bottom-right corner with slide-in animation from right to left."
+    ]
+  },
+  {
     "version": "2.0.0",
     "date": "2026-06-16",
     "changes": [
