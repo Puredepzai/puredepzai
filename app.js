@@ -836,7 +836,7 @@ async function runHDR(file, width, height) {
         );
 
         let filter =
-            "eq=brightness=0.35:contrast=1.3:gamma=0.8:saturation=1.3," +
+            "eq=brightness=0.20:contrast=1.25," +
             "zscale=transfer=linear," +
             "zscale=transfer=smpte2084:primaries=bt2020:matrix=bt2020nc," +
             "format=yuv420p10le";
@@ -1194,7 +1194,6 @@ async function patchSingleFile(item) {
 
     // Destroy FFmpeg instance before container parsing to free memory
     await destroyFFmpegInstance();
-    logMessage("FFmpeg engine reset for binary patch pipeline...", "info");
 
     let videoInfo = null;
     if (!sourceBuffer) {
@@ -1214,7 +1213,10 @@ async function patchSingleFile(item) {
     if (sourceBuffer) {
         inputBytes = new Uint8Array(sourceBuffer);
         inputView = new DataView(sourceBuffer);
-        logMessage("  Source: VFI 60fps output", "info");
+        logMessage(
+            `  Source: ${enableInterpolation?.checked ? "VFI 60fps" : "HDR10"} output`,
+            "info",
+        );
     } else {
         inputBytes = new Uint8Array(await item.file.arrayBuffer());
         inputView = new DataView(inputBytes.buffer);
