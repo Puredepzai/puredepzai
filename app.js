@@ -835,9 +835,9 @@ async function runHDR(file, width, height) {
         );
 
         let filter =
-            "eq=brightness=0.05:contrast=1.05," +
+            "eq=brightness=0.20:contrast=1.15:gamma=0.85," +
             "zscale=transfer=linear," +
-            "zscale=transfer=arib-std-b67:primaries=bt2020:matrix=bt2020nc," +
+            "zscale=transfer=smpte2084:primaries=bt2020:matrix=bt2020nc," +
             "format=yuv420p10le";
         if (width > height) {
             filter = `scale=-2:${targetRes},${filter}`;
@@ -864,7 +864,7 @@ async function runHDR(file, width, height) {
             "-pix_fmt",
             "yuv420p10le",
             "-x265-params",
-            "hdr-opt=1:repeat-headers=1:colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
+            "hdr10=1:repeat-headers=1:colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50):max-cll=1000,400",
             "-c:a",
             "copy",
             "-video_track_timescale",
