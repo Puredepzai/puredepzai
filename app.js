@@ -756,7 +756,7 @@ async function runVFI(file, width, height, targetRes = 1080, applyHDR = false) {
             logMessage("60fps HDR10 encoding complete.", "success");
         } else {
             logMessage(
-                "Interpolating video frames to 60fps... This may take a minute.",
+                "Interpolating video frames to 60fps (HEVC)... This may take a minute.",
                 "info",
             );
             const args = [
@@ -765,11 +765,13 @@ async function runVFI(file, width, height, targetRes = 1080, applyHDR = false) {
                 "-vf",
                 filter,
                 "-c:v",
-                "libx264",
+                "libx265",
                 "-preset",
-                "ultrafast",
+                "superfast",
                 "-crf",
-                "20",
+                "18",
+                "-pix_fmt",
+                "yuv420p10le",
                 "-c:a",
                 ext.toLowerCase() === ".mov" ? "aac" : "copy",
                 ...(ext.toLowerCase() === ".mov" ? ["-b:a", "256k"] : []),
