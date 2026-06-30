@@ -756,8 +756,8 @@ async function runVFI(file, width, height, targetRes = 1080, applyHDR = false) {
                 String(threads),
                 outputName,
             ];
+            logMessage("Encoding in progress, please wait...", "info");
             await instance.exec(args);
-            logMessage("60fps HDR10 encoding complete.", "success");
         } else {
             logMessage(
                 "Interpolating video frames to 60fps (HEVC)... This may take a minute.",
@@ -789,9 +789,11 @@ async function runVFI(file, width, height, targetRes = 1080, applyHDR = false) {
                 String(threads),
                 outputName,
             ];
+            logMessage("Encoding in progress, please wait...", "info");
             await instance.exec(args);
-            logMessage("Completed frame processing.", "success");
         }
+
+        logMessage("Encoding complete.", "success");
 
         const thumbnailBuffer = await extractThumbnailFromInstance(
             instance,
