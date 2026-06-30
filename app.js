@@ -858,7 +858,7 @@ async function runHDR(file, width, height) {
             "-c:v",
             "libx265",
             "-preset",
-            "ultrafast",
+            "superfast",
             "-crf",
             "18",
             "-pix_fmt",
