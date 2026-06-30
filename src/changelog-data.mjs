@@ -5,10 +5,14 @@ export const changelogData = [
         changes: [
             "SDR to HDR10 conversion via PQ transfer (`smpte2084`) with BT.2020 color space",
             "Tone expansion filters: `eq=brightness=0.20:contrast=1.25` + `zscale` PQ transfer",
-            "HEVC 10-bit output (libx265, preset fast, CRF 18, maxrate 20M, bufsize 40M) with full HDR10 metadata (master-display, max-cll=1000,400)",
-            "Added HDR preview thumbnail extraction from FFmpeg instance",
+            "HEVC 10-bit HDR output (libx265, preset fast, CRF 18, maxrate 20M, bufsize 40M) with full HDR10 metadata (master-display, max-cll=1000,400)",
+            "HEVC 8-bit VFI output (libx265, preset ultrafast, CRF 20) for WASM memory safety",
+            "Two-stage VFI+HDR pipeline (sequential FFmpeg instances to prevent WASM OOM)",
+            "HDR preview thumbnail extraction from FFmpeg instance",
             "Resolution selector enabled for HDR mode",
             "MOV input auto re-encodes PCM audio to AAC 256k",
+            "FFmpeg exec exit code validation and output file size verification",
+            "Deduplicated system log messages (removed double engine load, redundant progress messages)",
         ],
     },
     {
