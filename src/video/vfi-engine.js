@@ -60,12 +60,12 @@ export async function runVFI(file, width, height, targetRes, applyHDR, isCancell
                 outputName,
             ];
         } else {
-            logMessage("Interpolating video frames to 60fps (H.264)... This may take a minute.", "info");
+            logMessage("Interpolating video frames to 60fps (H.264)... This may take a bit longer.", "info");
             args = [
                 "-i", inputName,
                 "-vf", filter,
                 "-c:v", "libx264",
-                "-preset", "ultrafast",
+                "-preset", "fast",
                 "-crf", "20",
                 "-c:a", "copy",
                 "-video_track_timescale", "90000",
