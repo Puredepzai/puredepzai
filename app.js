@@ -1110,6 +1110,8 @@ patchBtn.addEventListener("click", async () => {
 
     if (patchBtn.dataset.mode === "retry") {
         selectedFiles.forEach(f => { if (f.status === "error") f.status = "pending"; });
+    } else if (patchBtn.dataset.mode === "patch" && currentFlowState === "completed") {
+        selectedFiles.forEach(f => { if (f.status === "success") f.status = "pending"; });
     }
 
     const pendingItems = selectedFiles.filter((f) => f.status === "pending");
