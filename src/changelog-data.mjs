@@ -1,5 +1,20 @@
 export const changelogData = [
     {
+        version: "2.6.0",
+        date: "2026-07-01",
+        changes: [
+            "Reprocess button when settings change after completion (no re-upload needed)",
+            "Retry Failed button for error files",
+            "Single-pass VFI+HDR pipeline (prevents OOM)",
+            "Modular `src/video/` (vfi-engine, hdr-engine, ffmpeg-manager, thumbnail-utils)",
+            "VFI-only reverted to H.264 (`libx264 fast CRF20`) — lower WASM memory than HEVC",
+            "Audio stream copy (`-c:a copy`) on all pipelines",
+            "Thumbnail extraction moved after `readFile` to reduce peak memory",
+            "VFI OOM on 1080p videos (H.264 encoder uses less WASM heap)",
+            "Settings checkbox/resolution changes not updating button state",
+        ],
+    },
+    {
         version: "2.5.0",
         date: "2026-06-18",
         changes: [
